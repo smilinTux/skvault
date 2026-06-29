@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "skvault"
+version = "0.1.0"
+description = "Sovereign secrets vault — gpg-agent SEAL (via capauth) + KeePass creds + Shamir social-recovery + TOTP 2FA"
+requires-python = ">=3.10"
+dependencies = [
+    "capauth",
+    "pykeepass>=4.0",
+    "python-gnupg>=0.5",
+    "click>=8.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.0",
+]
+
+[project.scripts]
+# The user-facing `skvault` verb stays the stable bash shim (~/.skenv/bin/skvault)
+# which maps get→creds-get etc.; it delegates to THIS backend entry point. Naming
+# the console script `skvault-backend` avoids clobbering the shim on install.
+skvault-backend = "skvault.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/skvault"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60
