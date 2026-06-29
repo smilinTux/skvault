@@ -7,6 +7,7 @@ name = "skvault"
 version = "0.1.0"
 description = "Sovereign secrets vault — gpg-agent SEAL (via capauth) + KeePass creds + Shamir social-recovery + TOTP 2FA"
 requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
 dependencies = [
     "capauth",
     "pykeepass>=4.0",
