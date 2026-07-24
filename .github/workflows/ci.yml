@@ -1,0 +1,74 @@
+name: CI
+
+# skvault guards 1471 live credentials (SOP.md §4 names pytest the release gate).
+# This workflow gates every push and PR so a shamir.py / vault_creds.py regression
+# cannot ship unnoticed. No secret values are referenced or required.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install capauth (sovereign) from source
+        # skvault depends on the smilinTux `capauth` (provides capauth.seal), which
+        # is NOT the unrelated `capauth` package on PyPI. Install the real one from
+        # its public repo FIRST so the requirement is already satisfied when skvault
+        # installs, and pip does not resolve the wrong PyPI project. Public clone,
+        # no token / no secret.
+        run: pip install "capauth @ git+https://github.com/smilinTux/capauth.git@main"
+      - name: Install skvault + dev deps
+        # Editable install from pyproject.toml so any import breakage is caught.
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+      - name: Check dist metadata
+        run: |
+          pip install twine
+          twine check dist/*
+
+  lint:
+    runs-on: ubuntu-latest
+    # Advisory only: the source predates a ruff style pass (36 check findings,
+    # 8 files needing `ruff format`). Failures are visible (red job) but do NOT
+    # block the workflow run. Drop continue-on-error once the debt is paid.
+    # Same pattern the sibling skcapstone CI uses for its lint job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lint tools
+        run: pip install ruff
+      - name: Check formatting
+        run: ruff format --check src/ tests/
+      - name: Lint
+        run: ruff check src/ tests/
