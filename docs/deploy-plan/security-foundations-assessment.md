@@ -54,7 +54,7 @@ Phase 3, polish (parallelizable, medium/low):
 ## 5. Task List
 
 1. security-foundations: add CI workflow to skvault (critical, no deps)
-2. security-foundations: PGP secret key and .kdbx backup/escrow procedure (critical, no deps)
+2. security-foundations: PGP secret key and .kdbx backup/escrow procedure (critical, no deps). Procedure documented in [../PGP_AND_KDBX_BACKUP_ESCROW.md](../PGP_AND_KDBX_BACKUP_ESCROW.md); first real backup is a Chef-gated ceremony (STOP §7).
 3. security-foundations: commit sq PQC build script and rebuild on .41 (high, no deps)
 4. security-foundations: recovery ceremony and multi-node join runbook, shim into git (high, no deps)
 5. security-foundations: distribute Shamir shares off-box and drill recovery (high, depends on 2 and 4)
