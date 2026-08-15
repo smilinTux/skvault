@@ -10,10 +10,18 @@
 > `capauth`'s PQC migration — see [SOP §9](SOP.md#9-maturity-tier--version-reference)).
 > **Status:** experimental · pre-1.0 (`0.1.0`) · NOT independently audited.
 
-Split out of `skingest` (EPIC `11eeac9e`) so secrets management is its own component:
-**`capauth` is the crypto home** (identity + sign/verify + seal/unseal); **`skvault` is
-the vault** (KeePass creds + recovery + Shamir + TOTP + lock lifecycle) that *depends on*
-`capauth.seal`; **`skingest` is pure ingestion** (also seals via `capauth.seal`).
+**This repo is the fleet's single home for the credential vault.** If you are looking for
+KeePass `.kdbx` access, Shamir k-of-n social recovery, or TOTP, they are here and nowhere
+else. They were stripped out of `skingest` in commit
+[`7a0cf6f`](https://github.com/smilinTux/skingest/commit/7a0cf6f) on **2026-06-29**
+(EPIC `11eeac9e`); `skingest`'s own README and SOP were corrected in August 2026 to point
+here, including a troubleshooting row for anyone still hunting `creds-get` / `unlock` /
+`vault-recover` in that repo.
+
+The ownership split: **`capauth` is the crypto home** (identity + sign/verify +
+seal/unseal); **`skvault` is the vault** (KeePass creds + recovery + Shamir + TOTP + lock
+lifecycle) that *depends on* `capauth.seal` and implements no encryption of its own;
+**`skingest` is pure ingestion** (also seals via `capauth.seal`) and holds no vault.
 
 ---
 
@@ -70,9 +78,21 @@ skvault vault-totp-init                                                # Authy/G
 skvault seal-word                                                      # memorable chat unlock-word (Hermes path)
 ```
 
-The user-facing verb is a thin bash shim (`~/.skenv/bin/skvault`) that maps
-`status→vault-status`, `get→creds-get`, `list→creds-list` and passes everything else
-through to the `skvault-backend` console script. Full command + flag reference:
+### ⚠️ `skvault` is not in this repository
+
+Every command above says `skvault`, but **`pip install` gives you `skvault-backend`.**
+The `skvault` verb is a thin bash shim at `~/.skenv/bin/skvault` that **this package does
+not ship and that does not exist anywhere in this git tree** (grep for it and you find
+nothing). That is deliberate: shipping a `skvault` console script would make every
+`pip install` clobber the shim, and the shim is the seam that lets the backend move
+without touching a single consumer.
+
+It maps `status` → `vault-status`, `get` → `creds-get`, `list` → `creds-list`, defaults to
+`status` when given no arguments, and passes everything else through unchanged. So a
+missing `status` command in `cli.py` is not a bug. The shim is **host state, not repo
+state**: it is not versioned, installed, or tested here, and on a node that lacks it every
+consumer fails with `skvault: command not found` while `skvault-backend` works fine.
+Details and how to recreate it: [SOP §3](SOP.md#3-build) and
 [SOP §7](SOP.md#7-api--reference).
 
 ---
