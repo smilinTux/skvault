@@ -14,6 +14,24 @@ the `.claude` session hooks, and the Hermes DM unlock path.
 ever holding your KeePass master password, and give you a sovereign way to recover the vault
 passphrase if your key is lost — all without inventing any new cryptography.
 
+### ▶ skvault is the fleet's credential vault. This is the only home for it.
+
+If you are looking for KeePass `.kdbx` access, Shamir k-of-n social recovery, or TOTP,
+**they live here and nowhere else.** That is worth stating plainly, because they used to
+live somewhere else and stale muscle memory still sends people there:
+
+- They were **stripped out of `skingest`** in commit
+  [`7a0cf6f`](https://github.com/smilinTux/skingest/commit/7a0cf6f) on **2026-06-29**
+  (`refactor(skingest): strip vault -> pure ingestion service`, EPIC `11eeac9e`).
+- `skingest` is now **pure ingestion** and holds no credential vault. Its README and SOP
+  were corrected in August 2026 to point here, including a troubleshooting row for anyone
+  hunting `creds-get` / `unlock` / `vault-recover` in that repo.
+- `capauth` remains the **crypto home** (identity, sign/verify, seal/unseal). skvault is
+  the vault built *on top of* `capauth.seal`; it is not a second crypto implementation.
+
+So the ownership split is: **`capauth` = the primitive. `skvault` = the vault.
+`skingest` = ingestion, no vault.** Anything credential-shaped belongs in this repo.
+
 **What it owns.**
 
 - The **gpg-agent lock lifecycle** — `unlock` (preset the passphrase into `gpg-agent`),
@@ -147,10 +165,35 @@ Runtime dependencies (`pyproject.toml`): `capauth`, `pykeepass>=4.0`, `python-gn
 `gpg-preset-passphrase` (ships with GnuPG, e.g. `/usr/lib*/gnupg*/` or
 `/usr/libexec/`); `qrencode` is *optional* (for the TOTP QR).
 
-The install produces the console script **`skvault-backend`** (`skvault.cli:main`). The
-stable user verb is the separate bash shim `~/.skenv/bin/skvault`, which is **not** shipped
-by this package (so installing never clobbers the shim) — it just points its one `BACKEND=`
-line at `skvault-backend`.
+The install produces the console script **`skvault-backend`** (`skvault.cli:main`).
+
+### ⚠️ The `skvault` command is NOT in this repository
+
+This trips up every new reader, so read it before you go looking. `pip install` gives you
+**`skvault-backend`**. The verb everyone actually types, **`skvault`**, is a **bash shim at
+`~/.skenv/bin/skvault` that this package does not ship and that does not exist anywhere in
+this git tree**. Cloning the repo and grepping for it finds nothing. That is deliberate:
+if the package shipped a `skvault` console script, every `pip install` would clobber the
+shim, and the shim is the seam that lets the backend move without touching a single
+consumer.
+
+Consequences worth internalising:
+
+- **The shim renames verbs.** `skvault status` is not a backend command; it becomes
+  `skvault-backend vault-status`. Same for `get` -> `creds-get` and `list` -> `creds-list`.
+  Looking for a `status` command in `cli.py` and not finding one does not mean it is
+  missing. Full mapping in §7.
+- **Everything else passes straight through**, so `skvault creds-init`, `skvault
+  vault-recover`, `skvault seal-word` all reach the backend under their real names.
+- **`skvault` with no arguments defaults to `status`.**
+- **It is host state, not repo state.** It is not versioned here, not installed here, and
+  not covered by this repo's tests. A node missing the shim has every consumer break with
+  `skvault: command not found` while `skvault-backend` works fine.
+- If the shim is missing on a node, recreate it as a small `exec` wrapper whose single
+  `BACKEND=` line points at `~/.skenv/bin/skvault-backend`, applying the §7 verb mapping
+  and passing everything else through unchanged.
+
+The mermaid diagram in §2 draws the shim as a distinct node for exactly this reason.
 
 ---
 
@@ -166,6 +209,30 @@ preset/probe, real `.kdbx` open) is exercised manually via the self-report comma
 (`skvault status`, `skvault creds-status`) — these are the **claim-evidence** commands:
 every operational claim in this SOP is reproducible from them.
 
+### What CI does and does not gate
+
+`.github/workflows/ci.yml` runs on push and PR to `master`, with three jobs:
+
+| Job | Gates? | Notes |
+|---|---|---|
+| `test` | **Yes.** `python -m pytest tests/ -v --tb=short` on py3.10 / 3.11 / 3.12, no `\|\| true`, no `continue-on-error`. A red test fails the run. | See the hermeticity caveat below. |
+| `build` | **Yes.** `python -m build` + `twine check dist/*`. | |
+| `lint` | **No.** Carries `continue-on-error: true`, so `ruff format --check` / `ruff check` are **advisory only** and a red lint job cannot block anything. | Deliberate: the source predates a style pass. Drop the flag once the debt is paid. |
+
+⚠️ **CI is NOT hermetic, so it is not usable as documentation evidence.** The `test` job
+installs `capauth` over the network:
+
+```
+pip install "capauth @ git+https://github.com/smilinTux/capauth.git@main"
+```
+
+That is necessary and correct (the `capauth` on PyPI is an unrelated project, so the
+requirement has to be satisfied from the sovereign repo first), but it means a CI run
+depends on GitHub reachability **and on whatever `capauth@main` happens to be**. A green
+run is not reproducible from this repo alone, and a red one may be someone else's commit.
+For that reason the `docs-evidence` block at the end of this SOP deliberately cites **no
+CI workflow**: every check there is repo-local and offline.
+
 ---
 
 ## 5. Release / Deploy
@@ -178,6 +245,21 @@ every operational claim in this SOP is reproducible from them.
 git tag vX.Y.Z && git push --tags
 python -m build && twine upload dist/*    # when published to PyPI; today: pip install -e from the repo
 ```
+
+**Where the version actually comes from, today.** Unlike most of the fleet, this repo does
+**not** derive its version from the git tag. It is **hardcoded in two places that must be
+edited together**: `version = "0.1.0"` in `pyproject.toml` and `__version__ = "0.1.0"` in
+`src/skvault/__init__.py`. Nothing enforces that lockstep at build time, so the failure
+mode is a silent split between the wheel metadata and what the package reports at runtime.
+The `docs-evidence` block pins them to the same value precisely to catch that.
+
+**The repo has ZERO git tags** (`git tag` returns nothing) and has never been published to
+PyPI. So the `git tag` / `twine upload` lines above describe the *intended* flow, not a
+flow that has ever run here. Today the only real install path is
+`~/.skenv/bin/pip install -e .` from a checkout, which is why §3's editable install is the
+operative instruction. Treat `0.1.0` as "pre-1.0, hand-maintained, unreleased", not as a
+published release. Migrating to setuptools-scm (tag-derived, like `skmemory` and
+`skcapstone`) would remove the drift risk entirely and is the recommended follow-up.
 
 Rollback = reinstall the prior tag (`pip install -e .` at the previous commit); there is no
 running service to redeploy and no migration to reverse (config + blobs are
@@ -294,10 +376,17 @@ either during the transition.
   symmetric word-blob (Grover-only), Shamir over GF(256) (information-theoretic), TOTP
   HMAC-SHA1 (a *verifier*, not a key). No suite-ids / no KEM live here because skvault
   negotiates none — agility lives in `capauth`.
-- **VERSION_LIFECYCLE phase:** **Incubating (v3)** — freshly split from `skingest`
-  (EPIC `11eeac9e`); pre-1.0. **SemVer:** `0.1.0` (`pyproject.toml` ⇄
-  `skvault.__version__`, kept in lockstep). Until 1.0, only the latest `0.x` line gets
-  fixes.
+- **VERSION_LIFECYCLE phase:** **Incubating (v3)**, split out of `skingest` in commit
+  `7a0cf6f` on 2026-06-29 (EPIC `11eeac9e`); pre-1.0. **SemVer:** `0.1.0`, hardcoded in
+  **two** places that must be edited together (`pyproject.toml` ⇄
+  `src/skvault/__init__.py`'s `__version__`); **not** tag-derived, and the repo currently
+  has **zero git tags** and no PyPI release. See §5 before you touch a version. Until 1.0,
+  only the latest `0.x` line gets fixes.
+- **Licence: GPL-3.0-or-later** (`LICENSE` is the verbatim GPLv3 text; `pyproject.toml`
+  declares `license = { text = "GPL-3.0-or-later" }`). Public repo.
+- **Scope of ownership:** this repo is the fleet's single home for KeePass credential
+  access, Shamir k-of-n social recovery and TOTP. See §1. `skingest` no longer contains
+  any of it and its docs point here.
 - **CRYPTOGRAPHY_STANDARD compliance.** skvault conforms by **delegation**: it holds **no
   master password** and contains **no** encryption implementation — the KeePass master is
   PGP-sealed to the sovereign identity via `capauth.seal` and is only unsealable while
@@ -311,3 +400,28 @@ either during the transition.
   Honest-claims gate: **no forbidden words** ("quantum-proof"/"quantum-safe"/"unbreakable"
   are never used); the classical seal surface is **never** described as quantum-resistant;
   AES-256 is **not** called quantum-broken.
+
+---
+
+<!-- docs-evidence
+verified: 2026-08-15
+checks:
+  - name: entry point is skvault-backend and no bare skvault script exists to clobber the shim
+    run: grep -qxF 'skvault-backend = "skvault.cli:main"' pyproject.toml && ! grep -qE '^skvault *=' pyproject.toml
+  - name: the shim documented in section 3 is genuinely absent from this tree
+    run: ! find . -path ./.git -prune -o -type f -name skvault -print 2>/dev/null | grep -q .
+  - name: all seven documented modules are present
+    run: for m in vault vault_creds shamir totp vault_recovery cli config; do test -f "src/skvault/$m.py" || exit 1; done
+  - name: the two hardcoded versions are in lockstep and non-empty (section 5)
+    run: V1=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1); V2=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/skvault/__init__.py | head -1); test -n "$V1" && test "$V1" = "$V2"
+  - name: licence is GPL-3.0-or-later in both LICENSE and pyproject.toml
+    run: grep -qxF 'license = { text = "GPL-3.0-or-later" }' pyproject.toml && grep -q 'GNU GENERAL PUBLIC LICENSE' LICENSE && grep -q 'Version 3, 29 June 2007' LICENSE
+  - name: crypto is by custody, all sealing delegates to capauth and no crypto library is imported here
+    run: grep -qxF 'from capauth import seal as capseal' src/skvault/vault.py && grep -qxF 'from capauth import seal as capseal' src/skvault/vault_creds.py && ! grep -rqE '^[[:space:]]*(from|import)[[:space:]]+(cryptography|nacl|Crypto|OpenSSL|pgpy)\b' src/skvault/
+  - name: the Shamir GF(256) public API documented in section 7 still exists
+    run: grep -qE '^def split\(secret: bytes, n: int, k: int\)' src/skvault/shamir.py && grep -qE '^def combine\(shares:' src/skvault/shamir.py
+  - name: the self-report functions behind every claim in this SOP still exist
+    run: grep -qE '^def vault_unlocked\(\)' src/skvault/vault.py && grep -qE '^def status_line\(\)' src/skvault/vault.py && grep -qE '^def status\(\)' src/skvault/vault_creds.py && grep -qE '^def status\(\)' src/skvault/vault_recovery.py && grep -qE '^def configured\(\)' src/skvault/totp.py
+  - name: the error strings quoted verbatim in section 8 still match the source
+    run: grep -qF 'vault LOCKED' src/skvault/vault_creds.py && grep -qF 'no KeePass DB configured' src/skvault/vault_creds.py && grep -qF 'pykeepass not installed' src/skvault/vault_creds.py && grep -qF 'recovery failed' src/skvault/cli.py
+-->
