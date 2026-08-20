@@ -15,4 +15,6 @@ unsealable while the vault is unlocked (gpg-agent has your passphrase cached).
 
 __version__ = "0.1.0"
 
-__all__ = ["__version__"]
+from .ssh_metadata import resolve_ssh
+
+__all__ = ["__version__", "resolve_ssh"]
