@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from skvault.ssh_metadata import resolve_ssh
 
 
