@@ -50,3 +50,10 @@ def test_resolve_ssh_rejects_symlink(tmp_path: Path, monkeypatch) -> None:
     link.symlink_to(real)
     with pytest.raises(ValueError):
         resolve_ssh("skvault://ssh/node")
+
+
+def test_resolve_ssh_rejects_writable_metadata_root(tmp_path: Path, monkeypatch) -> None:
+    _record(tmp_path, monkeypatch)
+    tmp_path.chmod(0o770)
+    with pytest.raises(PermissionError, match="metadata root"):
+        resolve_ssh("skvault://ssh/node")

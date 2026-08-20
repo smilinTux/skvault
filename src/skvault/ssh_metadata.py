@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -35,17 +36,50 @@ def resolve_ssh(reference: str) -> dict[str, Any]:
     if not _NAME.fullmatch(name):
         raise ValueError("invalid SSH metadata name")
     root = _metadata_root().resolve()
-    record_path = root / f"{name}.json"
-    if record_path.is_symlink() or not record_path.is_file():
-        raise ValueError("SSH metadata record must be a regular non-symlink file")
-    stat = record_path.stat()
-    if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
-        raise PermissionError("SSH metadata record must be owned by this user and mode 0600")
-    if stat.st_size > _MAX_RECORD_BYTES:
-        raise ValueError("SSH metadata record is too large")
     try:
-        record = json.loads(record_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        root_stat = root.stat()
+    except OSError as exc:
+        raise ValueError("SSH metadata root is unavailable") from exc
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or root_stat.st_uid != os.getuid()
+        or root_stat.st_mode & 0o022
+    ):
+        raise PermissionError(
+            "SSH metadata root must be owned by this user and not group/world writable"
+        )
+    record_path = root / f"{name}.json"
+    try:
+        fd = os.open(
+            record_path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as exc:
+        raise ValueError("SSH metadata record must be a regular non-symlink file") from exc
+    try:
+        record_stat = os.fstat(fd)
+        if not stat.S_ISREG(record_stat.st_mode):
+            raise ValueError("SSH metadata record must be a regular file")
+        if record_stat.st_uid != os.getuid() or record_stat.st_mode & 0o077:
+            raise PermissionError("SSH metadata record must be owned by this user and mode 0600")
+        if record_stat.st_size > _MAX_RECORD_BYTES:
+            raise ValueError("SSH metadata record is too large")
+        chunks = []
+        remaining = _MAX_RECORD_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > _MAX_RECORD_BYTES:
+            raise ValueError("SSH metadata record is too large")
+    finally:
+        os.close(fd)
+    try:
+        record = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError("invalid SSH metadata JSON") from exc
     if not isinstance(record, dict):
         raise ValueError("SSH metadata must be a JSON object")
