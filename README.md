@@ -106,6 +106,10 @@ Details and how to recreate it: [SOP §3](SOP.md#3-build) and
   `capauth.seal` (one implementation). It is **not** a network service, **not** a KEM or
   transport, and **not** an identity authority (that's `capauth`).
 
+The non-secret SSH metadata adapter accepts `username`, absolute protected
+`identity_file` and `known_hosts_file` paths, plus an optional bounded `port`.
+It never returns key bytes, passwords, tokens, or inline SSH options.
+
 ---
 
 ## Docs
