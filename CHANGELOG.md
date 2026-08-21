@@ -5,6 +5,9 @@
 - Allow validated SSH metadata records to carry an optional TCP port so
   governed collectors can reach WSL SSH endpoints without falling back to
   unreviewed SSH configuration or inline options.
+- Allow a non-secret transport hostname to differ from the canonical CMDB
+  asset name, keeping Windows/WSL identity stable while targeting the reviewed
+  WSL endpoint.
 
 All notable changes to `skvault` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to

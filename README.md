@@ -107,7 +107,8 @@ Details and how to recreate it: [SOP §3](SOP.md#3-build) and
   transport, and **not** an identity authority (that's `capauth`).
 
 The non-secret SSH metadata adapter accepts `username`, absolute protected
-`identity_file` and `known_hosts_file` paths, plus an optional bounded `port`.
+`identity_file` and `known_hosts_file` paths, plus optional validated transport
+`hostname` and bounded `port` values.
 It never returns key bytes, passwords, tokens, or inline SSH options.
 
 ---
