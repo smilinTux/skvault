@@ -97,7 +97,11 @@ def resolve_ssh(reference: str) -> dict[str, Any]:
     result: dict[str, Any] = {key: str(record[key]) for key in sorted(required)}
     if "hostname" in record:
         hostname = str(record["hostname"]).strip()
-        if not hostname or hostname.startswith("-") or any(char.isspace() for char in hostname):
+        if (
+            not hostname
+            or hostname.startswith("-")
+            or any(char.isspace() for char in hostname)
+        ):
             raise ValueError("SSH metadata hostname is invalid")
         result["hostname"] = hostname
     if "port" in record:
