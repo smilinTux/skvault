@@ -15,6 +15,7 @@ This module owns everything ABOVE that primitive that makes the vault a vault:
 
 All seal/unseal goes through capauth.seal so there is ONE encryption implementation.
 """
+
 from __future__ import annotations
 
 import glob
@@ -38,6 +39,7 @@ def recipients() -> list[str]:
 def seal(plaintext: str, *, to=None, sign_by=None) -> str:
     return capseal.seal(plaintext, to=to, sign_by=sign_by)
 
+
 CIPHER_PREFIX = "-----BEGIN PGP MESSAGE-----"
 
 # Memorable chat unlock-word blob — legacy home, kept for live continuity.
@@ -45,7 +47,12 @@ _WORD_BLOB = Path(os.path.expanduser("~/.config/skmemory/vault-word.blob"))
 
 
 def _has_secret_key(uid: str) -> bool:
-    return subprocess.run(["gpg", "--list-secret-keys", uid], capture_output=True).returncode == 0
+    return (
+        subprocess.run(
+            ["gpg", "--list-secret-keys", uid], capture_output=True, check=False
+        ).returncode
+        == 0
+    )
 
 
 def vault_unlocked() -> bool | None:
@@ -62,17 +69,22 @@ def vault_unlocked() -> bool | None:
         return None  # we don't even hold a private key for any recipient
     try:
         ct = seal("probe", to=[target], sign_by="")
-    except Exception:
+    except Exception:  # noqa: BLE001 - unavailable SEAL backends mean an unknown lock state
         return None
     r = subprocess.run(
         ["gpg", "--batch", "--pinentry-mode", "cancel", "--decrypt"],
-        input=ct.encode(), capture_output=True,
+        input=ct.encode(),
+        capture_output=True,
+        check=False,
     )
     return r.returncode == 0
 
 
 def _preset_bin() -> str | None:
-    for pat in ("/usr/lib*/gnupg*/gpg-preset-passphrase", "/usr/libexec/gpg-preset-passphrase"):
+    for pat in (
+        "/usr/lib*/gnupg*/gpg-preset-passphrase",
+        "/usr/libexec/gpg-preset-passphrase",
+    ):
         hits = glob.glob(pat)
         if hits:
             return hits[0]
@@ -81,12 +93,16 @@ def _preset_bin() -> str | None:
 
 def _encryption_keygrips(uid: str) -> list[str]:
     """Keygrips of encryption-capable (sub)keys for uid we hold the secret of."""
-    out = subprocess.run(["gpg", "--batch", "--with-keygrip", "--list-secret-keys", uid],
-                         capture_output=True, text=True).stdout
+    out = subprocess.run(
+        ["gpg", "--batch", "--with-keygrip", "--list-secret-keys", uid],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
     grips, in_enc = [], False
     for line in out.splitlines():
         s = line.strip()
-        if s.startswith("ssb") or s.startswith("sec"):
+        if s.startswith(("ssb", "sec")):
             in_enc = "e" in (s.split("[")[-1].split("]")[0].lower() if "[" in s else "")
         elif s.startswith("Keygrip") and in_enc:
             grips.append(s.split("=")[-1].strip())
@@ -103,15 +119,18 @@ def unlock(passphrase: str) -> bool:
         if not _has_secret_key(r):
             continue
         for grip in _encryption_keygrips(r):
-            rc = subprocess.run([preset, "--preset", "--passphrase", passphrase, grip],
-                               capture_output=True).returncode
+            rc = subprocess.run(
+                [preset, "--preset", "--passphrase", passphrase, grip],
+                capture_output=True,
+                check=False,
+            ).returncode
             did = did or rc == 0
     return did and vault_unlocked() is True
 
 
 def lock() -> None:
     """Flush gpg-agent's cached passphrases (reliable — restarts the agent)."""
-    subprocess.run(["gpgconf", "--kill", "gpg-agent"], capture_output=True)
+    subprocess.run(["gpgconf", "--kill", "gpg-agent"], capture_output=True, check=False)
 
 
 def verify_passphrase(passphrase: str) -> bool:
@@ -124,12 +143,25 @@ def verify_passphrase(passphrase: str) -> bool:
         return False
     try:
         ct = seal("verify", to=recipients()[:1], sign_by="")
-    except Exception:
+    except Exception:  # noqa: BLE001 - any SEAL failure rejects the passphrase probe
         return False
-    subprocess.run(["gpgconf", "--kill", "gpg-agent"], capture_output=True)  # clear cache → test the real input
+    subprocess.run(
+        ["gpgconf", "--kill", "gpg-agent"], capture_output=True, check=False
+    )  # clear cache → test the real input
     r = subprocess.run(
-        ["gpg", "--batch", "--pinentry-mode", "loopback", "--passphrase", passphrase, "--decrypt"],
-        input=ct.encode(), capture_output=True)
+        [
+            "gpg",
+            "--batch",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            passphrase,
+            "--decrypt",
+        ],
+        input=ct.encode(),
+        capture_output=True,
+        check=False,
+    )
     return r.returncode == 0 and r.stdout.decode().strip() == "verify"
 
 
@@ -144,10 +176,24 @@ def seal_word(word: str, passphrase: str) -> bool:
     """One-time: seal the real passphrase under a memorable unlock-word (AES256)."""
     _WORD_BLOB.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
-        ["gpg", "--batch", "--yes", "--symmetric", "--cipher-algo", "AES256",
-         "--pinentry-mode", "loopback", "--passphrase", word, "--armor",
-         "-o", str(_WORD_BLOB)],
-        input=passphrase.encode(), capture_output=True,
+        [
+            "gpg",
+            "--batch",
+            "--yes",
+            "--symmetric",
+            "--cipher-algo",
+            "AES256",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            word,
+            "--armor",
+            "-o",
+            str(_WORD_BLOB),
+        ],
+        input=passphrase.encode(),
+        capture_output=True,
+        check=False,
     )
     if r.returncode == 0:
         os.chmod(_WORD_BLOB, 0o600)
@@ -160,9 +206,19 @@ def unlock_with_word(word: str) -> bool:
     if not _WORD_BLOB.exists():
         return False
     r = subprocess.run(
-        ["gpg", "--batch", "--quiet", "--pinentry-mode", "loopback",
-         "--passphrase", word, "--decrypt", str(_WORD_BLOB)],
+        [
+            "gpg",
+            "--batch",
+            "--quiet",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            word,
+            "--decrypt",
+            str(_WORD_BLOB),
+        ],
         capture_output=True,
+        check=False,
     )
     if r.returncode != 0:
         return False
@@ -176,7 +232,11 @@ def unlock_with_word(word: str) -> bool:
 def notify_if_changed(line: str | None = None) -> bool:
     """Fire a Telegram sk-alert ONLY when the vault lock state changes. Returns True if alerted."""
     line = line or status_line()
-    cur = "unlocked" if line.startswith("🔓") else ("locked" if line.startswith("🔒") else "n/a")
+    cur = (
+        "unlocked"
+        if line.startswith("🔓")
+        else ("locked" if line.startswith("🔒") else "n/a")
+    )
     state_dir = config.STATE_DIR
     state_dir.mkdir(parents=True, exist_ok=True)
     f = state_dir / "vault_lock_state"
@@ -188,7 +248,10 @@ def notify_if_changed(line: str | None = None) -> bool:
         skalert = os.path.expanduser("~/.skenv/bin/sk-alert")
         if os.path.exists(skalert):
             level = "warn" if cur == "unlocked" else "info"
-            subprocess.run([skalert, "-l", level, "-k", "skvault-vault", "--", line])
+            subprocess.run(
+                [skalert, "-l", level, "-k", "skvault-vault", "--", line],
+                check=False,
+            )
             return True
     return False
 

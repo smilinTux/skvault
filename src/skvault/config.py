@@ -15,6 +15,7 @@ On import we softly load the legacy skingest.env and a skvault.env (setdefault â
 never clobbering a value already exported in the real shell environment) so that
 SKINGEST_KEEPASS_DB written there by the existing `creds-init` is still honored.
 """
+
 from __future__ import annotations
 
 import os
@@ -24,12 +25,14 @@ from pathlib import Path
 # Env-file bootstrap (transition continuity)
 # ---------------------------------------------------------------------------
 
-SKVAULT_ENV_PATH = Path(os.environ.get(
-    "SKVAULT_ENV", Path.home() / ".config" / "skvault" / "skvault.env"
-))
-_LEGACY_ENV_PATH = Path(os.environ.get(
-    "SKINGEST_ENV", Path.home() / ".config" / "skmemory" / "skingest.env"
-))
+SKVAULT_ENV_PATH = Path(
+    os.environ.get("SKVAULT_ENV", Path.home() / ".config" / "skvault" / "skvault.env")
+)
+_LEGACY_ENV_PATH = Path(
+    os.environ.get(
+        "SKINGEST_ENV", Path.home() / ".config" / "skmemory" / "skingest.env"
+    )
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -80,11 +83,19 @@ def master_blob_write() -> Path:
 
 
 def keepass_db() -> str | None:
-    return os.environ.get("SKVAULT_KEEPASS_DB") or os.environ.get("SKINGEST_KEEPASS_DB") or None
+    return (
+        os.environ.get("SKVAULT_KEEPASS_DB")
+        or os.environ.get("SKINGEST_KEEPASS_DB")
+        or None
+    )
 
 
 def keepass_keyfile() -> str | None:
-    return os.environ.get("SKVAULT_KEEPASS_KEYFILE") or os.environ.get("SKINGEST_KEEPASS_KEYFILE") or None
+    return (
+        os.environ.get("SKVAULT_KEEPASS_KEYFILE")
+        or os.environ.get("SKINGEST_KEEPASS_KEYFILE")
+        or None
+    )
 
 
 # ---------------------------------------------------------------------------

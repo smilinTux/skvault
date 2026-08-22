@@ -55,13 +55,17 @@ def resolve_ssh(reference: str) -> dict[str, Any]:
             os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
     except OSError as exc:
-        raise ValueError("SSH metadata record must be a regular non-symlink file") from exc
+        raise ValueError(
+            "SSH metadata record must be a regular non-symlink file"
+        ) from exc
     try:
         record_stat = os.fstat(fd)
         if not stat.S_ISREG(record_stat.st_mode):
             raise ValueError("SSH metadata record must be a regular file")
         if record_stat.st_uid != os.getuid() or record_stat.st_mode & 0o077:
-            raise PermissionError("SSH metadata record must be owned by this user and mode 0600")
+            raise PermissionError(
+                "SSH metadata record must be owned by this user and mode 0600"
+            )
         if record_stat.st_size > _MAX_RECORD_BYTES:
             raise ValueError("SSH metadata record is too large")
         chunks = []
@@ -82,7 +86,8 @@ def resolve_ssh(reference: str) -> dict[str, Any]:
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError("invalid SSH metadata JSON") from exc
     if not isinstance(record, dict):
-        raise ValueError("SSH metadata must be a JSON object")
+        # The caller supplied bytes; this rejects decoded content, not argument type.
+        raise ValueError("SSH metadata must be a JSON object")  # noqa: TRY004
     allowed = {"username", "identity_file", "known_hosts_file"}
     if set(record) != allowed:
         raise ValueError("SSH metadata contains missing or unsupported fields")

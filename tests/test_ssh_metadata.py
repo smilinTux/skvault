@@ -2,10 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+
 from skvault.ssh_metadata import resolve_ssh
 
 
-def _record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str = "node") -> Path:
+def _record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str = "node"
+) -> Path:
     monkeypatch.setenv("SKVAULT_SSH_METADATA_DIR", str(tmp_path))
     path = tmp_path / f"{name}.json"
     path.write_text(
@@ -30,8 +33,12 @@ def test_resolve_ssh_returns_metadata_only(tmp_path: Path, monkeypatch) -> None:
     }
 
 
-@pytest.mark.parametrize("reference", ["ssh/node", "skvault://ssh/../node", "skvault://x"])
-def test_resolve_ssh_rejects_unscoped_reference(tmp_path, monkeypatch, reference) -> None:
+@pytest.mark.parametrize(
+    "reference", ["ssh/node", "skvault://ssh/../node", "skvault://x"]
+)
+def test_resolve_ssh_rejects_unscoped_reference(
+    tmp_path, monkeypatch, reference
+) -> None:
     _record(tmp_path, monkeypatch)
     with pytest.raises(ValueError):
         resolve_ssh(reference)
@@ -52,7 +59,9 @@ def test_resolve_ssh_rejects_symlink(tmp_path: Path, monkeypatch) -> None:
         resolve_ssh("skvault://ssh/node")
 
 
-def test_resolve_ssh_rejects_writable_metadata_root(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_ssh_rejects_writable_metadata_root(
+    tmp_path: Path, monkeypatch
+) -> None:
     _record(tmp_path, monkeypatch)
     tmp_path.chmod(0o770)
     with pytest.raises(PermissionError, match="metadata root"):

@@ -6,6 +6,14 @@ All notable changes to `skvault` are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Cleared the legacy Ruff formatting and lint debt across `src/` and `tests/`,
+  made the CI lint job blocking, and updated the operator SOP to reflect the
+  enforced release gate. Broad exception catches remain only at intentional
+  fail-closed CLI/backend boundaries and subprocess calls now state their
+  non-raising behavior explicitly.
+
 ### Added
 
 - **`docs-evidence` block + `docs-check` CI gate.** `SOP.md` now ends with an executable
@@ -34,9 +42,8 @@ All notable changes to `skvault` are documented here. The format is based on
   (`status` to `vault-status`, `get` to `creds-get`, `list` to `creds-list`), it defaults
   to `status` with no arguments, and it is host state rather than repo state. Covered in
   SOP section 3 and the README, and pinned by an evidence check on its absence.
-- **Documented what CI does and does not gate.** The `test` and `build` jobs are real
-  gates; the `lint` job carries `continue-on-error: true` and is advisory only. More
-  importantly `ci.yml` is **not hermetic**: it installs
+- **Documented what CI does and does not gate.** The `test`, `build`, and `lint` jobs are
+  real gates. More importantly `ci.yml` is **not hermetic**: it installs
   `capauth @ git+https://github.com/smilinTux/capauth.git@main` over the network, so a
   green run depends on GitHub reachability and on whatever `capauth@main` currently is.
   Recorded in SOP section 4 as the reason no CI workflow appears in the evidence block.

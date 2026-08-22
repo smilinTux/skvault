@@ -9,6 +9,7 @@ Used for sovereign social recovery of the vault passphrase: each share is then
 PGP-sealed to one holder's key (see vault_recovery.py). No single holder — not
 even the agent — can recover alone.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,7 +21,7 @@ _x = 1
 for _i in range(255):
     _EXP[_i] = _x
     _LOG[_x] = _i
-    _x ^= (_x << 1) ^ (0x11b if _x & 0x80 else 0)
+    _x ^= (_x << 1) ^ (0x11B if _x & 0x80 else 0)
     _x &= 0xFF
 for _i in range(255, 512):
     _EXP[_i] = _EXP[_i - 255]
@@ -81,9 +82,9 @@ def combine(shares: list[tuple[int, bytes]]) -> bytes:
             for m, (xm, _) in enumerate(shares):
                 if m == j:
                     continue
-                num = _mul(num, xm)        # product of x_m
-                den = _mul(den, xj ^ xm)   # product of (x_j - x_m) == xor in GF(2^8)
-            lagrange = _div(num, den)      # basis poly evaluated at 0
+                num = _mul(num, xm)  # product of x_m
+                den = _mul(den, xj ^ xm)  # product of (x_j - x_m) == xor in GF(2^8)
+            lagrange = _div(num, den)  # basis poly evaluated at 0
             acc ^= _mul(yj[pos], lagrange)
         out.append(acc)
     return bytes(out)
