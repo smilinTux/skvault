@@ -9,6 +9,7 @@ The seed lives 0600 on your own box (config.TOTP_SECRET_FILE). Its compromise al
 reveals no passphrase — it only lets someone pass the 2nd-factor gate, which still
 requires the primary factor (k Shamir shares, or the passphrase).
 """
+
 from __future__ import annotations
 
 import base64
@@ -28,17 +29,28 @@ def gen_secret() -> str:
     return base64.b32encode(os.urandom(20)).decode().rstrip("=")
 
 
-def provisioning_uri(secret: str, account: str = "chef@skworld.io", issuer: str = "SKWorld-Vault") -> str:
-    q = urllib.parse.urlencode({"secret": secret, "issuer": issuer, "algorithm": "SHA1",
-                                "digits": "6", "period": "30"})
-    return f"otpauth://totp/{urllib.parse.quote(issuer)}:{urllib.parse.quote(account)}?{q}"
+def provisioning_uri(
+    secret: str, account: str = "chef@skworld.io", issuer: str = "SKWorld-Vault"
+) -> str:
+    q = urllib.parse.urlencode(
+        {
+            "secret": secret,
+            "issuer": issuer,
+            "algorithm": "SHA1",
+            "digits": "6",
+            "period": "30",
+        }
+    )
+    return (
+        f"otpauth://totp/{urllib.parse.quote(issuer)}:{urllib.parse.quote(account)}?{q}"
+    )
 
 
 def _code_at(secret: str, counter: int) -> str:
     key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
     h = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     o = h[-1] & 0x0F
-    v = (struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    v = (struct.unpack(">I", h[o : o + 4])[0] & 0x7FFFFFFF) % 1_000_000
     return f"{v:06d}"
 
 
@@ -49,7 +61,9 @@ def now_code(secret: str, t: float | None = None) -> str:
 def verify(secret: str, code: str, window: int = 1, t: float | None = None) -> bool:
     counter = int((t if t is not None else time.time()) // 30)
     target = str(code).strip().zfill(6)
-    return any(_code_at(secret, counter + w) == target for w in range(-window, window + 1))
+    return any(
+        _code_at(secret, counter + w) == target for w in range(-window, window + 1)
+    )
 
 
 # --- stored seed (the configured factor) -------------------------------------

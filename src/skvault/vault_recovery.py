@@ -10,6 +10,7 @@ Layout: config.RECOVERY_DIR (default ~/.config/skmemory/recovery/)
     manifest.json                 {holders, threshold k, n, created}
     <holder-slug>.share.asc       PGP message: the Shamir share, sealed to <holder>
 """
+
 from __future__ import annotations
 
 import json
@@ -27,13 +28,31 @@ def _slug(uid: str) -> str:
 
 
 def _have_pubkey(uid: str) -> bool:
-    return subprocess.run(["gpg", "--list-keys", uid], capture_output=True).returncode == 0
+    return (
+        subprocess.run(
+            ["gpg", "--list-keys", uid], capture_output=True, check=False
+        ).returncode
+        == 0
+    )
 
 
 def _encrypt_to(uid: str, text: str) -> str | None:
     r = subprocess.run(
-        ["gpg", "--batch", "--yes", "--armor", "--trust-model", "always", "--recipient", uid, "--encrypt"],
-        input=text.encode(), capture_output=True)
+        [
+            "gpg",
+            "--batch",
+            "--yes",
+            "--armor",
+            "--trust-model",
+            "always",
+            "--recipient",
+            uid,
+            "--encrypt",
+        ],
+        input=text.encode(),
+        capture_output=True,
+        check=False,
+    )
     return r.stdout.decode() if r.returncode == 0 else None
 
 
@@ -56,8 +75,12 @@ def share_init(passphrase: str, holders: list[str], k: int) -> dict:
         path.write_text(blob)
         path.chmod(0o600)
         sealed.append(str(path))
-    manifest = {"holders": holders, "threshold": k, "n": n,
-                "shares": {h: f"{_slug(h)}.share.asc" for h in holders}}
+    manifest = {
+        "holders": holders,
+        "threshold": k,
+        "n": n,
+        "shares": {h: f"{_slug(h)}.share.asc" for h in holders},
+    }
     MANIFEST.write_text(json.dumps(manifest, indent=2))
     return {"sealed": sealed, "threshold": k, "n": n}
 
@@ -67,8 +90,11 @@ def provide_share(holder: str) -> tuple[int, int, bytes] | None:
     path = REC_DIR / f"{_slug(holder)}.share.asc"
     if not path.exists():
         return None
-    r = subprocess.run(["gpg", "--batch", "--quiet", "--decrypt", str(path)],
-                       capture_output=True)
+    r = subprocess.run(
+        ["gpg", "--batch", "--quiet", "--decrypt", str(path)],
+        capture_output=True,
+        check=False,
+    )
     if r.returncode != 0:
         return None  # that holder's key isn't available/unlocked
     return shamir.share_from_str(r.stdout.decode())
@@ -86,7 +112,7 @@ def recover(providers: list[str]) -> str | None:
     shares = [(x, y) for _, x, y in parts]
     try:
         return shamir.combine(shares).decode()
-    except Exception:
+    except Exception:  # noqa: BLE001 - malformed shares fail closed
         return None
 
 
@@ -95,5 +121,10 @@ def status() -> dict:
         return {"configured": False}
     m = json.loads(MANIFEST.read_text())
     present = [h for h in m["holders"] if (REC_DIR / f"{_slug(h)}.share.asc").exists()]
-    return {"configured": True, "threshold": m["threshold"], "n": m["n"],
-            "holders": m["holders"], "shares_present": present}
+    return {
+        "configured": True,
+        "threshold": m["threshold"],
+        "n": m["n"],
+        "holders": m["holders"],
+        "shares_present": present,
+    }

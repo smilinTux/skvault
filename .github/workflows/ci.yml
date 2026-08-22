@@ -56,11 +56,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    # Advisory only: the source predates a ruff style pass (36 check findings,
-    # 8 files needing `ruff format`). Failures are visible (red job) but do NOT
-    # block the workflow run. Drop continue-on-error once the debt is paid.
-    # Same pattern the sibling skcapstone CI uses for its lint job.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

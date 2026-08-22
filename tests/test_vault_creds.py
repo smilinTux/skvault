@@ -9,6 +9,7 @@ touch the running gpg-agent. We:
     path is exercised without gpg-agent), and capauth.seal.recipients to a fake uid,
   • monkeypatch skvault.config.master_blob_read/write to a tmp blob.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -16,7 +17,6 @@ from pathlib import Path
 
 import pytest
 from pykeepass import create_database
-
 
 TEST_MASTER = "throwaway-master-pw-123"
 
@@ -27,8 +27,20 @@ def test_kdbx(tmp_path: Path) -> Path:
     db = tmp_path / "test.kdbx"
     kp = create_database(str(db), password=TEST_MASTER)
     g = kp.root_group
-    kp.add_entry(g, title="GitHub", username="octocat", password="ghsecret", url="https://github.com")
-    kp.add_entry(g, title="Email Account", username="me@example.com", password="mailsecret", url="https://mail.example.com")
+    kp.add_entry(
+        g,
+        title="GitHub",
+        username="octocat",
+        password="ghsecret",
+        url="https://github.com",
+    )
+    kp.add_entry(
+        g,
+        title="Email Account",
+        username="me@example.com",
+        password="mailsecret",
+        url="https://mail.example.com",
+    )
     kp.save()
     return db
 
@@ -36,8 +48,9 @@ def test_kdbx(tmp_path: Path) -> Path:
 @pytest.fixture()
 def vc(monkeypatch, tmp_path, test_kdbx):
     """Import skvault.vault_creds with the live vault fully mocked out."""
-    import skvault.config as config
-    import capauth.seal as seal
+    from capauth import seal
+
+    from skvault import config
 
     # Point at the throwaway DB; clear any legacy fallback.
     monkeypatch.setenv("SKVAULT_KEEPASS_DB", str(test_kdbx))
@@ -55,7 +68,8 @@ def vc(monkeypatch, tmp_path, test_kdbx):
     monkeypatch.setattr(seal, "unseal", lambda ct: TEST_MASTER)
     monkeypatch.setattr(seal, "recipients", lambda: ["chef@test.local"])
 
-    import skvault.vault_creds as vault_creds
+    from skvault import vault_creds
+
     importlib.reload(vault_creds)
     # re-apply patches that the reload may have re-bound
     monkeypatch.setattr(config, "master_blob_read", lambda: blob)
@@ -85,7 +99,8 @@ def test_get_no_match(vc):
 
 
 def test_locked_blocks_open(vc, monkeypatch):
-    import capauth.seal as seal
+    from capauth import seal
+
     # vault LOCKED: unseal returns None (gpg-agent cache miss / pinentry cancel)
     monkeypatch.setattr(seal, "unseal", lambda ct: None)
     matches, err = vc.get("github")
@@ -101,7 +116,8 @@ def test_status_shape(vc):
 
 
 def test_shamir_roundtrip():
-    import skvault.shamir as shamir
+    from skvault import shamir
+
     secret = b"correct horse battery staple"
     shares = shamir.split(secret, n=5, k=3)
     assert shamir.combine(shares[:3]) == secret
@@ -109,7 +125,8 @@ def test_shamir_roundtrip():
 
 
 def test_shamir_serialization():
-    import skvault.shamir as shamir
+    from skvault import shamir
+
     shares = shamir.split(b"hello", n=3, k=2)
     x, y = shares[0]
     s = shamir.share_to_str(x, y, 2)
@@ -118,7 +135,8 @@ def test_shamir_serialization():
 
 
 def test_totp_verify():
-    import skvault.totp as totp
+    from skvault import totp
+
     secret = totp.gen_secret()
     code = totp.now_code(secret)
     assert totp.verify(secret, code) is True
@@ -127,31 +145,45 @@ def test_totp_verify():
 
 def test_cli_help_lists_commands():
     from skvault.cli import build_cli
+
     cli = build_cli()
     names = set(cli.commands.keys())
     for expected in [
-        "unlock", "lock", "vault-status", "seal-word",
-        "creds-init", "creds-get", "creds-list", "creds-status",
-        "vault-share-init", "vault-recover", "vault-recovery-status",
-        "vault-totp-init", "vault-totp-verify",
+        "unlock",
+        "lock",
+        "vault-status",
+        "seal-word",
+        "creds-init",
+        "creds-get",
+        "creds-list",
+        "creds-status",
+        "vault-share-init",
+        "vault-recover",
+        "vault-recovery-status",
+        "vault-totp-init",
+        "vault-totp-verify",
     ]:
         assert expected in names, f"missing command {expected}"
 
 
 def test_cli_creds_list_runs(vc, monkeypatch, test_kdbx, tmp_path):
     """End-to-end: `creds-list` against the throwaway DB via the click runner."""
+    from capauth import seal
     from click.testing import CliRunner
-    import capauth.seal as seal
-    import skvault.config as config
+
+    from skvault import config
 
     monkeypatch.setenv("SKVAULT_KEEPASS_DB", str(test_kdbx))
     blob = tmp_path / "keepass-master.asc"
     if not blob.exists():
-        blob.write_text("-----BEGIN PGP MESSAGE-----\nfake\n-----END PGP MESSAGE-----\n")
+        blob.write_text(
+            "-----BEGIN PGP MESSAGE-----\nfake\n-----END PGP MESSAGE-----\n"
+        )
     monkeypatch.setattr(config, "master_blob_read", lambda: blob)
     monkeypatch.setattr(seal, "unseal", lambda ct: TEST_MASTER)
 
     from skvault.cli import build_cli
+
     runner = CliRunner()
     result = runner.invoke(build_cli(), ["creds-list"])
     assert result.exit_code == 0, result.output

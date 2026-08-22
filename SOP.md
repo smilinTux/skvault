@@ -217,7 +217,7 @@ every operational claim in this SOP is reproducible from them.
 |---|---|---|
 | `test` | **Yes.** `python -m pytest tests/ -v --tb=short` on py3.10 / 3.11 / 3.12, no `\|\| true`, no `continue-on-error`. A red test fails the run. | See the hermeticity caveat below. |
 | `build` | **Yes.** `python -m build` + `twine check dist/*`. | |
-| `lint` | **No.** Carries `continue-on-error: true`, so `ruff format --check` / `ruff check` are **advisory only** and a red lint job cannot block anything. | Deliberate: the source predates a style pass. Drop the flag once the debt is paid. |
+| `lint` | **Yes.** `ruff format --check src/ tests/` and `ruff check src/ tests/` run without `continue-on-error`. A red lint job fails the run. | The legacy formatting and lint debt was cleared in August 2026. |
 
 ⚠️ **CI is NOT hermetic, so it is not usable as documentation evidence.** The `test` job
 installs `capauth` over the network:
