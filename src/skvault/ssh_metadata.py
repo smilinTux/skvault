@@ -88,9 +88,28 @@ def resolve_ssh(reference: str) -> dict[str, Any]:
     if not isinstance(record, dict):
         # The caller supplied bytes; this rejects decoded content, not argument type.
         raise ValueError("SSH metadata must be a JSON object")  # noqa: TRY004
-    allowed = {"username", "identity_file", "known_hosts_file"}
-    if set(record) != allowed:
+    required = {"username", "identity_file", "known_hosts_file"}
+    allowed = required | {"hostname", "port"}
+    if not required.issubset(record) or not set(record).issubset(allowed):
         raise ValueError("SSH metadata contains missing or unsupported fields")
     if any(key in record for key in ("password", "private_key", "token", "secret")):
         raise ValueError("SSH metadata must never contain inline secrets")
-    return {key: str(record[key]) for key in sorted(allowed)}
+    result: dict[str, Any] = {key: str(record[key]) for key in sorted(required)}
+    if "hostname" in record:
+        hostname = str(record["hostname"]).strip()
+        if (
+            not hostname
+            or hostname.startswith("-")
+            or any(char.isspace() for char in hostname)
+        ):
+            raise ValueError("SSH metadata hostname is invalid")
+        result["hostname"] = hostname
+    if "port" in record:
+        try:
+            port = int(record["port"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SSH metadata port must be an integer") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("SSH metadata port must be between 1 and 65535")
+        result["port"] = port
+    return result

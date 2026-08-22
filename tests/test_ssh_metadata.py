@@ -33,6 +33,35 @@ def test_resolve_ssh_returns_metadata_only(tmp_path: Path, monkeypatch) -> None:
     }
 
 
+def test_resolve_ssh_accepts_bounded_port_metadata(tmp_path: Path, monkeypatch) -> None:
+    path = _record(tmp_path, monkeypatch)
+    payload = json.loads(path.read_text())
+    payload["port"] = 2222
+    path.write_text(json.dumps(payload))
+
+    assert resolve_ssh("skvault://ssh/node")["port"] == 2222
+
+
+def test_resolve_ssh_accepts_transport_hostname(tmp_path: Path, monkeypatch) -> None:
+    path = _record(tmp_path, monkeypatch)
+    payload = json.loads(path.read_text())
+    payload["hostname"] = "100.120.22.21"
+    path.write_text(json.dumps(payload))
+
+    assert resolve_ssh("skvault://ssh/node")["hostname"] == "100.120.22.21"
+
+
+@pytest.mark.parametrize("port", [0, 65536, "not-a-port"])
+def test_resolve_ssh_rejects_invalid_port(tmp_path: Path, monkeypatch, port) -> None:
+    path = _record(tmp_path, monkeypatch)
+    payload = json.loads(path.read_text())
+    payload["port"] = port
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="port"):
+        resolve_ssh("skvault://ssh/node")
+
+
 @pytest.mark.parametrize(
     "reference", ["ssh/node", "skvault://ssh/../node", "skvault://x"]
 )
