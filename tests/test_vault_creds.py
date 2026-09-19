@@ -188,3 +188,55 @@ def test_cli_creds_list_runs(vc, monkeypatch, test_kdbx, tmp_path):
     result = runner.invoke(build_cli(), ["creds-list"])
     assert result.exit_code == 0, result.output
     assert "GitHub" in result.output
+
+
+# ---------------------------------------------------------------------------
+# creds-add: the vault could only ever be READ from, so every write to the
+# kdbx had to happen by hand in a GUI. That is the gap this closes.
+# ---------------------------------------------------------------------------
+
+
+def test_add_creates_a_new_entry(vc):
+    ok, err = vc.add("skgit LFS_JWT_SECRET", "skgit", "s3cr3t-value")
+    assert err is None, err
+    assert ok is True
+    matches, err = vc.get("skgit LFS_JWT_SECRET")
+    assert err is None
+    assert len(matches) == 1
+    assert matches[0]["password"] == "s3cr3t-value"
+
+
+def test_add_refuses_to_clobber_an_existing_entry(vc):
+    ok, err = vc.add("GitHub", "someone-else", "different")
+    assert ok is False
+    assert "already exists" in (err or "")
+    matches, _ = vc.get("GitHub")
+    assert (
+        matches[0]["password"] == "ghsecret"
+    ), "the original must survive a refused add"
+
+
+def test_add_overwrite_updates_in_place(vc):
+    ok, err = vc.add("GitHub", "octocat", "rotated", overwrite=True)
+    assert err is None and ok is True
+    matches, _ = vc.get("GitHub")
+    assert len(matches) == 1, "overwrite must update, never duplicate"
+    assert matches[0]["password"] == "rotated"
+
+
+def test_add_refuses_when_the_vault_is_locked(vc, monkeypatch):
+    from capauth import seal
+
+    monkeypatch.setattr(seal, "unseal", lambda ct: None)
+    ok, err = vc.add("Should Not Land", "u", "p")
+    assert ok is False
+    assert "LOCK" in (err or "").upper()
+
+
+def test_add_persists_across_a_reopen(vc):
+    vc.add("Durable Entry", "svc", "written-once")
+    titles, err = vc.list_titles()
+    assert err is None
+    assert (
+        "Durable Entry" in titles
+    ), "add() must save the kdbx, not just mutate in memory"

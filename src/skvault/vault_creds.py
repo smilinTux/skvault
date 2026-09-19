@@ -131,6 +131,64 @@ def get(query: str) -> tuple[list[dict], str | None]:
     return matches, None
 
 
+def add(
+    title: str,
+    username: str,
+    password: str,
+    url: str = "",
+    notes: str = "",
+    overwrite: bool = False,
+) -> tuple[bool, str | None]:
+    """Write one credential into the kdbx. Returns (ok, error_str).
+
+    The vault was read-only until now, so every write had to be done by hand in
+    a GUI. That is fine for a human adding one password and useless for anything
+    automated: a generated service secret could be produced but not stored, which
+    is how secrets end up pasted into terminals and transcripts instead.
+
+    Refuses to clobber by default. An existing title is a refusal, not a silent
+    replace, because overwriting the wrong entry destroys the only copy of a
+    secret and there is no undo. `overwrite=True` updates in place rather than
+    adding a second entry with the same title, since duplicate titles make
+    `get()` ambiguous and the caller cannot tell which one is live.
+    """
+    if not title or not password:
+        return False, "title and password are both required"
+    kp, err = _open()
+    if err:
+        return False, err
+    existing = [e for e in kp.entries if e.title == title]
+    if existing and not overwrite:
+        return False, f"entry {title!r} already exists (pass overwrite to replace it)"
+    if existing:
+        entry = existing[0]
+        entry.password = password
+        if username:
+            entry.username = username
+        if url:
+            entry.url = url
+        if notes:
+            entry.notes = notes
+        action = "updated"
+    else:
+        kp.add_entry(
+            kp.root_group,
+            title=title,
+            username=username or "",
+            password=password,
+            url=url or "",
+            notes=notes or "",
+        )
+        action = "added"
+    try:
+        kp.save()
+    except Exception as e:  # noqa: BLE001 - KeePass exposes backend-specific failures
+        return False, f"save failed: {str(e)[:80]}"
+    # The value never reaches the audit log; only that a write happened.
+    _audit("add", f"title={title!r} action={action}")
+    return True, None
+
+
 def list_titles() -> tuple[list[str], str | None]:
     kp, err = _open()
     if err:
