@@ -69,7 +69,9 @@ def vault_unlocked() -> bool | None:
         return None  # we don't even hold a private key for any recipient
     try:
         ct = seal("probe", to=[target], sign_by="")
-    except Exception:  # noqa: BLE001 - unavailable SEAL backends mean an unknown lock state
+    except (
+        Exception
+    ):  # noqa: BLE001 - unavailable SEAL backends mean an unknown lock state
         return None
     r = subprocess.run(
         ["gpg", "--batch", "--pinentry-mode", "cancel", "--decrypt"],

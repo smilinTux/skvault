@@ -7,6 +7,7 @@ hooks expect:
   skvault unlock [--word W]    skvault lock              skvault vault-status [--notify]
   skvault seal-word           skvault creds-init ...    skvault creds-get <q> [--show]
   skvault creds-list [filter] skvault creds-status
+  skvault creds-add <title> [--generate] [--overwrite]
   skvault vault-share-init --holders a,b,c [--threshold k]
   skvault vault-recover --providers a,b [--totp CODE]   skvault vault-recovery-status
   skvault vault-totp-init [--force]                     skvault vault-totp-verify CODE
@@ -223,6 +224,70 @@ def cmd_creds_list(filter_text: str | None) -> None:
     raise SystemExit(0)
 
 
+@click.command(
+    "creds-add",
+    help="Write a credential into the KeePass vault (needs vault unlocked)",
+)
+@click.argument("title")
+@click.option("--username", default="", help="Username / account for the entry.")
+@click.option("--url", default="", help="Site or service URL.")
+@click.option("--notes", default="", help="Free-text notes.")
+@click.option(
+    "--generate",
+    is_flag=True,
+    help="Generate a strong random secret instead of prompting. Never echoed.",
+)
+@click.option(
+    "--length", default=44, show_default=True, help="Bytes of entropy when generating."
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Replace an existing entry with this title instead of refusing.",
+)
+def cmd_creds_add(
+    title: str,
+    username: str,
+    url: str,
+    notes: str,
+    generate: bool,
+    length: int,
+    overwrite: bool,
+) -> None:
+    """Add or update one entry.
+
+    The secret is never taken as a command-line argument: that would put it in
+    shell history and in the process list, where anything on the box can read
+    it. It is either generated here or prompted for without echo.
+    """
+    import secrets
+
+    from skvault import vault_creds as vc
+
+    if generate:
+        password = secrets.token_urlsafe(length)
+    else:
+        password = getpass.getpass("  secret (hidden): ")
+        if not password:
+            click.echo("  ✗ empty secret, nothing written")
+            raise SystemExit(1)
+        confirm = getpass.getpass("  confirm: ")
+        if password != confirm:
+            click.echo("  ✗ secrets do not match, nothing written")
+            raise SystemExit(1)
+
+    ok, err = vc.add(
+        title, username, password, url=url, notes=notes, overwrite=overwrite
+    )
+    password = None  # forget
+    if err:
+        click.echo(f"  ✗ {err}")
+        raise SystemExit(1)
+    click.echo(f"  ✓ stored {title!r}" + (" (generated)" if generate else ""))
+    click.echo("  Read it back with: skvault creds-get <title> --show")
+    raise SystemExit(0)
+
+
 @click.command("creds-status", help="Show KeePass vault config + lock state")
 def cmd_creds_status() -> None:
     from skvault import vault_creds as vc
@@ -399,6 +464,7 @@ _COMMANDS = [
     cmd_seal_word,
     cmd_creds_init,
     cmd_creds_get,
+    cmd_creds_add,
     cmd_creds_list,
     cmd_creds_status,
     cmd_vault_share_init,
