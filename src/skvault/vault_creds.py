@@ -189,6 +189,91 @@ def add(
     return True, None
 
 
+def update(
+    title: str,
+    password: str | None = None,
+    username: str | None = None,
+    url: str | None = None,
+    notes: str | None = None,
+) -> tuple[bool, str | None]:
+    """Change fields on ONE existing entry, in place. Returns (ok, error_str).
+
+    An update is a targeted mutation of an entry that already exists, not a
+    re-add: a missing title is a refusal, never a silent create, and the title
+    itself is never rewritten (that is rename, a different decision). Only the
+    fields actually supplied are touched, so updating the url cannot clobber a
+    password the caller did not mean to change. Values passed in are written to
+    the kdbx; they are never logged and never echoed by the CLI, which takes
+    them generated / prompted / stdin only.
+    """
+    if not title:
+        return False, "title is required"
+    if password is None and username is None and url is None and notes is None:
+        return False, "nothing to update (pass any of password/username/url/notes)"
+    kp, err = _open()
+    if err:
+        return False, err
+    existing = [e for e in kp.entries if e.title == title]
+    if not existing:
+        return False, f"no entry titled {title!r} to update (creds-list to see titles)"
+    if len(existing) > 1:
+        return (
+            False,
+            f"{len(existing)} entries titled {title!r}; update is ambiguous, deduplicate first",
+        )
+    entry = existing[0]
+    changed: list[str] = []
+    if password is not None:
+        entry.password = password
+        changed.append("password")
+    if username is not None:
+        entry.username = username
+        changed.append("username")
+    if url is not None:
+        entry.url = url
+        changed.append("url")
+    if notes is not None:
+        entry.notes = notes
+        changed.append("notes")
+    try:
+        kp.save()
+    except Exception as e:  # noqa: BLE001 - KeePass exposes backend-specific failures
+        return False, f"save failed: {str(e)[:80]}"
+    # Field NAMES are safe to log; field VALUES never are.
+    _audit("update", f"title={title!r} fields={','.join(changed)}")
+    return True, None
+
+
+def delete(title: str) -> tuple[bool, str | None]:
+    """Remove ONE existing entry and save. Returns (ok, error_str).
+
+    Deletion is irreversible: a kdbx has no trash to restore from and the only
+    copy of the secret dies with the entry, so the CLI refuses by default and
+    requires an explicit confirmation flag (mirroring add()'s refusal to
+    clobber). The audit line records the title only, never any value.
+    """
+    if not title:
+        return False, "title is required"
+    kp, err = _open()
+    if err:
+        return False, err
+    existing = [e for e in kp.entries if e.title == title]
+    if not existing:
+        return False, f"no entry titled {title!r} to delete (creds-list to see titles)"
+    if len(existing) > 1:
+        return (
+            False,
+            f"{len(existing)} entries titled {title!r}; delete is ambiguous, deduplicate first",
+        )
+    kp.delete_entry(existing[0])
+    try:
+        kp.save()
+    except Exception as e:  # noqa: BLE001 - KeePass exposes backend-specific failures
+        return False, f"save failed: {str(e)[:80]}"
+    _audit("delete", f"title={title!r}")
+    return True, None
+
+
 def list_titles() -> tuple[list[str], str | None]:
     kp, err = _open()
     if err:

@@ -276,7 +276,7 @@ def cmd_creds_add(
             click.echo("  ✗ secrets do not match, nothing written")
             raise SystemExit(1)
 
-    ok, err = vc.add(
+    _ok, err = vc.add(
         title, username, password, url=url, notes=notes, overwrite=overwrite
     )
     password = None  # forget
@@ -285,6 +285,135 @@ def cmd_creds_add(
         raise SystemExit(1)
     click.echo(f"  ✓ stored {title!r}" + (" (generated)" if generate else ""))
     click.echo("  Read it back with: skvault creds-get <title> --show")
+    raise SystemExit(0)
+
+
+@click.command(
+    "creds-update",
+    help="Change fields on ONE existing entry (needs vault unlocked). Never creates.",
+)
+@click.argument("title")
+@click.option(
+    "--username", default=None, help="New username (not a secret; argument is fine)."
+)
+@click.option("--url", default=None, help="New url (not a secret; argument is fine).")
+@click.option(
+    "--notes", default=None, help="New notes (not a secret; argument is fine)."
+)
+@click.option(
+    "--password",
+    "password_opt",
+    default=None,
+    hidden=True,  # deliberately undocumented: AC3 makes an argv secret a hard error
+)
+@click.option(
+    "--generate",
+    is_flag=True,
+    help="Generate a strong random password. Never echoed.",
+)
+@click.option(
+    "--length", default=44, show_default=True, help="Bytes of entropy when generating."
+)
+@click.option(
+    "--password-stdin",
+    "password_stdin",
+    is_flag=True,
+    help="Read the new password from stdin (no echo, no argv).",
+)
+def cmd_creds_update(
+    title: str,
+    username: str | None,
+    url: str | None,
+    notes: str | None,
+    password_opt: str | None,
+    generate: bool,
+    length: int,
+    password_stdin: bool,
+) -> None:
+    """Update fields on one existing entry, in place.
+
+    Same secret discipline as creds-add: the password is generated in-process,
+    prompted for without echo, or read from stdin, never taken as a
+    command-line argument. A missing title is a refusal, not a silent create;
+    use creds-add for that.
+    """
+    import secrets
+    import sys
+
+    from skvault import vault_creds as vc
+
+    # AC3 is a hard error, not a fallback: an argv-secret has already leaked to
+    # shell history and the process list, so 'it still works' is not good enough.
+    if password_opt is not None:
+        click.echo(
+            "  ✗ --password would put the secret in shell history and the process list;"
+            " generate it (--generate) or pipe it in (--password-stdin)"
+        )
+        raise SystemExit(2)
+    if generate and password_stdin:
+        click.echo("  ✗ pass either --generate or --password-stdin, not both")
+        raise SystemExit(2)
+
+    password: str | None = None
+    if generate:
+        password = secrets.token_urlsafe(length)
+    elif password_stdin:
+        password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            click.echo("  ✗ empty password on stdin, nothing written")
+            raise SystemExit(1)
+
+    if password is None and username is None and url is None and notes is None:
+        click.echo(
+            "  ✗ nothing to update (pass username/url/notes or a password source)"
+        )
+        raise SystemExit(2)
+
+    _ok, err = vc.update(
+        title, password=password, username=username, url=url, notes=notes
+    )
+    password = None  # forget
+    if err:
+        click.echo(f"  ✗ {err}")
+        raise SystemExit(1)
+    click.echo(
+        f"  ✓ updated {title!r}"
+        + (" (password generated, never echoed)" if generate else "")
+    )
+    raise SystemExit(0)
+
+
+@click.command(
+    "creds-delete",
+    help="Remove ONE existing entry (needs vault unlocked; needs --yes).",
+)
+@click.argument("title")
+@click.option(
+    "--yes",
+    "-y",
+    "yes",
+    is_flag=True,
+    help="Actually delete. Without this flag the command refuses and changes nothing.",
+)
+def cmd_creds_delete(title: str, yes: bool) -> None:
+    """Delete one existing entry.
+
+    Deletion is irreversible and the kdbx keeps no trash, so a bare
+    `creds-delete <title>` refuses on purpose: the default must be the safe
+    outcome, especially for automation. The audit line records the title only.
+    """
+    from skvault import vault_creds as vc
+
+    if not yes:
+        click.echo(
+            f"  ✗ refusing to delete {title!r} without an explicit confirmation flag (--yes)"
+        )
+        raise SystemExit(1)
+    _ok, err = vc.delete(title)
+    if err:
+        click.echo(f"  ✗ {err}")
+        raise SystemExit(1)
+    click.echo(f"  ✓ deleted {title!r}")
     raise SystemExit(0)
 
 
@@ -465,6 +594,8 @@ _COMMANDS = [
     cmd_creds_init,
     cmd_creds_get,
     cmd_creds_add,
+    cmd_creds_update,
+    cmd_creds_delete,
     cmd_creds_list,
     cmd_creds_status,
     cmd_vault_share_init,
