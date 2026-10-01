@@ -60,8 +60,12 @@ def cmd_unlock(word: str | None) -> None:
     if ok:
         click.echo(line)
     else:
-        click.echo("✗ unlock failed: that was neither the vault key passphrase nor the unlock-word.")
-        click.echo("  The passphrase is the long string in your password manager; the word is the")
+        click.echo(
+            "✗ unlock failed: that was neither the vault key passphrase nor the unlock-word."
+        )
+        click.echo(
+            "  The passphrase is the long string in your password manager; the word is the"
+        )
         click.echo("  short memorable one. Either works at this prompt or with --word.")
     vault.notify_if_changed(line)
     raise SystemExit(0 if ok else 1)
