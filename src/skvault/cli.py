@@ -44,7 +44,7 @@ def cmd_unlock(word: str | None) -> None:
     else:
         try:
             pw = getpass.getpass(
-                "  Chef GPG key passphrase — the vault key, NOT your KeePass master (hidden): "
+                "  Vault key passphrase OR your unlock-word (hidden): "
             )
         except (EOFError, KeyboardInterrupt):
             click.echo("\n  cancelled.")
@@ -52,21 +52,17 @@ def cmd_unlock(word: str | None) -> None:
         if not pw:
             click.echo("  no passphrase given.")
             raise SystemExit(1)
-        ok = vault.unlock(pw)
+        # Accept either secret at the prompt: the GPG key passphrase first, then the
+        # sealed unlock-word (Chef typed the word here and it was rejected).
+        ok = vault.unlock(pw) or vault.unlock_with_word(pw)
         del pw
     line = vault.status_line()
     if ok:
         click.echo(line)
     else:
-        click.echo(
-            "✗ unlock failed — almost always a mistyped passphrase (paste it from your"
-        )
-        click.echo(
-            "  password manager; it's a long string). The passphrase ALONE unlocks —"
-        )
-        click.echo(
-            "  a seal-word is optional (only for memorable-word / Hermes unlock)."
-        )
+        click.echo("✗ unlock failed: that was neither the vault key passphrase nor the unlock-word.")
+        click.echo("  The passphrase is the long string in your password manager; the word is the")
+        click.echo("  short memorable one. Either works at this prompt or with --word.")
     vault.notify_if_changed(line)
     raise SystemExit(0 if ok else 1)
 
