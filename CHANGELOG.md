@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The interactive `skvault unlock` prompt now accepts either the vault key
+  passphrase or the unlock-word (it tries the passphrase first, then the word);
+  the failure message names both. `--word` is unchanged.
 - Allow validated SSH metadata records to carry an optional TCP port so
   governed collectors can reach WSL SSH endpoints without falling back to
   unreviewed SSH configuration or inline options.
