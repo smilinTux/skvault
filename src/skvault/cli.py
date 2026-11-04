@@ -7,7 +7,7 @@ hooks expect:
   skvault unlock [--word W]    skvault lock              skvault vault-status [--notify]
   skvault seal-word           skvault creds-init ...    skvault creds-get <q> [--show]
   skvault creds-list [filter] skvault creds-status
-  skvault creds-add <title> [--generate] [--overwrite]
+  skvault creds-add <title> [--group G] [--generate] [--overwrite]
   skvault vault-share-init --holders a,b,c [--threshold k]
   skvault vault-recover --providers a,b [--totp CODE]   skvault vault-recovery-status
   skvault vault-totp-init [--force]                     skvault vault-totp-verify CODE
@@ -233,6 +233,11 @@ def cmd_creds_list(filter_text: str | None) -> None:
 @click.option("--url", default="", help="Site or service URL.")
 @click.option("--notes", default="", help="Free-text notes.")
 @click.option(
+    "--group",
+    default="",
+    help="Group path to file it under, e.g. skworld. Created if missing.",
+)
+@click.option(
     "--generate",
     is_flag=True,
     help="Generate a strong random secret instead of prompting. Never echoed.",
@@ -250,6 +255,7 @@ def cmd_creds_add(
     username: str,
     url: str,
     notes: str,
+    group: str,
     generate: bool,
     length: int,
     overwrite: bool,
@@ -277,7 +283,13 @@ def cmd_creds_add(
             raise SystemExit(1)
 
     ok, err = vc.add(
-        title, username, password, url=url, notes=notes, overwrite=overwrite
+        title,
+        username,
+        password,
+        url=url,
+        notes=notes,
+        group=group or None,
+        overwrite=overwrite,
     )
     password = None  # forget
     if err:

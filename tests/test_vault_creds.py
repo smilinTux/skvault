@@ -240,3 +240,68 @@ def test_add_persists_across_a_reopen(vc):
     assert (
         "Durable Entry" in titles
     ), "add() must save the kdbx, not just mutate in memory"
+
+
+def test_add_requires_a_title_and_a_password(vc):
+    ok, err = vc.add("", "u", "p")
+    assert ok is False and "required" in (err or "")
+    ok, err = vc.add("No Secret", "u", "")
+    assert ok is False and "required" in (err or "")
+
+
+def test_add_places_the_entry_in_a_named_group(vc, test_kdbx):
+    """The live vault keeps related secrets in groups (skflow lives in `skworld`).
+
+    Without this, every automated write lands in the root group, away from the
+    entries a human filed by hand, and the vault slowly splits into two layouts.
+    """
+    ok, err = vc.add(
+        "Grouped Secret", "svc", "in-a-group", group="skworld/windmill"
+    )
+    assert err is None and ok is True
+
+    from pykeepass import PyKeePass
+
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    entry = next(e for e in kp.entries if e.title == "Grouped Secret")
+    assert [g.name for g in kp.root_group.subgroups if g.name == "skworld"], (
+        "the group should have been created"
+    )
+    assert entry.group.name == "windmill"
+    assert entry.group.parentgroup.name == "skworld"
+
+
+def test_add_reuses_an_existing_group_instead_of_duplicating_it(vc, test_kdbx):
+    vc.add("First In Group", "a", "p1", group="skworld")
+    vc.add("Second In Group", "b", "p2", group="skworld")
+
+    from pykeepass import PyKeePass
+
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    named = [g for g in kp.root_group.subgroups if g.name == "skworld"]
+    assert len(named) == 1, "a second add must not create a parallel group"
+    titles = {e.title for e in named[0].entries}
+    assert {"First In Group", "Second In Group"} <= titles
+
+
+def test_add_backs_up_the_kdbx_before_writing(vc, test_kdbx):
+    """A credential DB write has no undo, so keep the previous bytes."""
+    before = test_kdbx.read_bytes()
+    ok, err = vc.add("Backed Up", "svc", "value")
+    assert err is None and ok is True
+
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + ".bak-*"))
+    assert baks, "add() must write a backup before saving"
+    assert baks[-1].read_bytes() == before, "the backup must be the PRE-write bytes"
+    assert baks[-1].stat().st_mode & 0o777 == 0o600
+
+
+def test_add_prunes_old_backups(vc, test_kdbx):
+    for i in range(8):
+        ok, err = vc.add("Entry %d" % i, "svc", "v%d" % i)
+        assert err is None, err
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + ".bak-*"))
+    assert len(baks) <= vc.BACKUP_KEEP, (
+        "backups of a 1.8 MB credential DB must not grow without bound, got %d"
+        % len(baks)
+    )

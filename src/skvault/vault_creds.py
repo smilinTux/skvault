@@ -19,6 +19,7 @@ Audit: ~/clawd/logs/keepass-access.log
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -27,6 +28,11 @@ from capauth import seal as capseal
 from skvault import config, vault
 
 AUDIT_LOG = config.AUDIT_LOG
+
+# How many pre-write copies of the kdbx to keep. The live DB is ~1.8 MB with
+# over 1,500 entries, so unbounded backups are real disk, but a write to a
+# credential store has no undo and losing the only copy of a secret is worse.
+BACKUP_KEEP = 5
 
 
 def _db_path() -> str | None:
@@ -131,12 +137,49 @@ def get(query: str) -> tuple[list[dict], str | None]:
     return matches, None
 
 
+def _ensure_group(kp, path: str):
+    """Resolve a `a/b/c` group path, creating any missing level. Returns the group."""
+    grp = kp.root_group
+    for name in [part for part in path.split("/") if part]:
+        child = next((g for g in grp.subgroups if g.name == name), None)
+        if child is None:
+            child = kp.add_group(grp, name)
+        grp = child
+    return grp
+
+
+def _backup_db(db: str) -> str | None:
+    """Copy the kdbx aside BEFORE a write, then prune to BACKUP_KEEP newest.
+
+    pykeepass saves in place, so a failed or bad write lands on top of the only
+    copy. The backup is the pre-write bytes, mode 0600 like the DB it mirrors.
+    """
+    src = Path(db)
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + "%06dZ" % (
+        time.time_ns() // 1000 % 1000000
+    )
+    bak = src.with_name(src.name + ".bak-" + stamp)
+    try:
+        shutil.copy2(src, bak)
+        os.chmod(bak, 0o600)
+    except OSError as e:
+        return f"backup failed: {str(e)[:80]}"
+    old = sorted(src.parent.glob(src.name + ".bak-*"))
+    for stale in old[:-BACKUP_KEEP]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass  # a backup we cannot prune is not a reason to block the write
+    return None
+
+
 def add(
     title: str,
     username: str,
     password: str,
     url: str = "",
     notes: str = "",
+    group: str | None = None,
     overwrite: bool = False,
 ) -> tuple[bool, str | None]:
     """Write one credential into the kdbx. Returns (ok, error_str).
@@ -151,6 +194,11 @@ def add(
     secret and there is no undo. `overwrite=True` updates in place rather than
     adding a second entry with the same title, since duplicate titles make
     `get()` ambiguous and the caller cannot tell which one is live.
+
+    `group` is a `a/b` path, created if missing. The live vault files related
+    secrets together (the skflow Windmill keys live under `skworld`), so an
+    automated write needs to be able to land beside the entries a human filed
+    by hand instead of piling up in the root group.
     """
     if not title or not password:
         return False, "title and password are both required"
@@ -172,7 +220,7 @@ def add(
         action = "updated"
     else:
         kp.add_entry(
-            kp.root_group,
+            _ensure_group(kp, group) if group else kp.root_group,
             title=title,
             username=username or "",
             password=password,
@@ -180,12 +228,15 @@ def add(
             notes=notes or "",
         )
         action = "added"
+    bak_err = _backup_db(_db_path())
+    if bak_err:
+        return False, bak_err + " (refusing to write without a backup)"
     try:
         kp.save()
     except Exception as e:  # noqa: BLE001 - KeePass exposes backend-specific failures
         return False, f"save failed: {str(e)[:80]}"
     # The value never reaches the audit log; only that a write happened.
-    _audit("add", f"title={title!r} action={action}")
+    _audit("add", f"title={title!r} action={action} group={group or '/'}")
     return True, None
 
 
