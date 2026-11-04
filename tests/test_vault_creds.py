@@ -290,7 +290,7 @@ def test_add_backs_up_the_kdbx_before_writing(vc, test_kdbx):
     ok, err = vc.add("Backed Up", "svc", "value")
     assert err is None and ok is True
 
-    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + ".bak-*"))
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
     assert baks, "add() must write a backup before saving"
     assert baks[-1].read_bytes() == before, "the backup must be the PRE-write bytes"
     assert baks[-1].stat().st_mode & 0o777 == 0o600
@@ -300,8 +300,23 @@ def test_add_prunes_old_backups(vc, test_kdbx):
     for i in range(8):
         ok, err = vc.add("Entry %d" % i, "svc", "v%d" % i)
         assert err is None, err
-    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + ".bak-*"))
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
     assert len(baks) <= vc.BACKUP_KEEP, (
         "backups of a 1.8 MB credential DB must not grow without bound, got %d"
         % len(baks)
     )
+
+
+def test_add_never_prunes_a_hand_made_backup(vc, test_kdbx):
+    """The live DB sits beside human backups (bak-rot-*, bak-pre-*).
+
+    Pruning by name across two naming schemes is how an automated writer
+    deletes somebody's only snapshot, so our prune must not even see them.
+    """
+    human = test_kdbx.with_name(test_kdbx.name + ".bak-rot-20261018")
+    human.write_bytes(b"irreplaceable")
+    for i in range(BACKUP_KEEP_OVERSHOOT := vc.BACKUP_KEEP + 4):
+        ok, err = vc.add("Churn %d" % i, "svc", "v%d" % i)
+        assert err is None, err
+    assert human.exists(), "a hand-made backup must survive our pruning"
+    assert human.read_bytes() == b"irreplaceable"

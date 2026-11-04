@@ -33,6 +33,8 @@ AUDIT_LOG = config.AUDIT_LOG
 # over 1,500 entries, so unbounded backups are real disk, but a write to a
 # credential store has no undo and losing the only copy of a secret is worse.
 BACKUP_KEEP = 5
+# Distinct from any hand-made backup name, so pruning can never reach one.
+BACKUP_PREFIX = ".bak-autowrite-"
 
 
 def _db_path() -> str | None:
@@ -158,13 +160,17 @@ def _backup_db(db: str) -> str | None:
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + "%06dZ" % (
         time.time_ns() // 1000 % 1000000
     )
-    bak = src.with_name(src.name + ".bak-" + stamp)
+    bak = src.with_name(src.name + BACKUP_PREFIX + stamp)
     try:
         shutil.copy2(src, bak)
         os.chmod(bak, 0o600)
     except OSError as e:
         return f"backup failed: {str(e)[:80]}"
-    old = sorted(src.parent.glob(src.name + ".bak-*"))
+    # Prune ONLY our own copies. The live DB sits beside hand-made backups with
+    # their own names (bak-rot-20261018, bak-pre-laptop-secrets-...). A glob of
+    # `.bak-*` would see those too, and pruning by lexicographic name across two
+    # naming schemes is how an automated writer deletes a human's only snapshot.
+    old = sorted(src.parent.glob(src.name + BACKUP_PREFIX + "*"))
     for stale in old[:-BACKUP_KEEP]:
         try:
             stale.unlink()
