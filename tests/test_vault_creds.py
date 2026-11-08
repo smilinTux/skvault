@@ -188,3 +188,233 @@ def test_cli_creds_list_runs(vc, monkeypatch, test_kdbx, tmp_path):
     result = runner.invoke(build_cli(), ["creds-list"])
     assert result.exit_code == 0, result.output
     assert "GitHub" in result.output
+
+
+# ---------------------------------------------------------------------------
+# creds-add: the vault could only ever be READ from, so every write to the
+# kdbx had to happen by hand in a GUI. That is the gap this closes.
+# ---------------------------------------------------------------------------
+
+
+def test_add_creates_a_new_entry(vc):
+    ok, err = vc.add("skgit LFS_JWT_SECRET", "skgit", "s3cr3t-value")
+    assert err is None, err
+    assert ok is True
+    matches, err = vc.get("skgit LFS_JWT_SECRET")
+    assert err is None
+    assert len(matches) == 1
+    assert matches[0]["password"] == "s3cr3t-value"
+
+
+def test_add_refuses_to_clobber_an_existing_entry(vc):
+    ok, err = vc.add("GitHub", "someone-else", "different")
+    assert ok is False
+    assert "already exists" in (err or "")
+    matches, _ = vc.get("GitHub")
+    assert matches[0]["password"] == "ghsecret", (
+        "the original must survive a refused add"
+    )
+
+
+def test_add_overwrite_updates_in_place(vc):
+    ok, err = vc.add("GitHub", "octocat", "rotated", overwrite=True)
+    assert err is None and ok is True
+    matches, _ = vc.get("GitHub")
+    assert len(matches) == 1, "overwrite must update, never duplicate"
+    assert matches[0]["password"] == "rotated"
+
+
+def test_add_refuses_when_the_vault_is_locked(vc, monkeypatch):
+    from capauth import seal
+
+    monkeypatch.setattr(seal, "unseal", lambda ct: None)
+    ok, err = vc.add("Should Not Land", "u", "p")
+    assert ok is False
+    assert "LOCK" in (err or "").upper()
+
+
+def test_add_persists_across_a_reopen(vc):
+    vc.add("Durable Entry", "svc", "written-once")
+    titles, err = vc.list_titles()
+    assert err is None
+    assert "Durable Entry" in titles, (
+        "add() must save the kdbx, not just mutate in memory"
+    )
+
+
+def test_add_requires_a_title_and_a_password(vc):
+    ok, err = vc.add("", "u", "p")
+    assert ok is False and "required" in (err or "")
+    ok, err = vc.add("No Secret", "u", "")
+    assert ok is False and "required" in (err or "")
+
+
+def test_add_places_the_entry_in_a_named_group(vc, test_kdbx):
+    """The live vault keeps related secrets in groups (skflow lives in `skworld`).
+
+    Without this, every automated write lands in the root group, away from the
+    entries a human filed by hand, and the vault slowly splits into two layouts.
+    """
+    ok, err = vc.add("Grouped Secret", "svc", "in-a-group", group="skworld/windmill")
+    assert err is None and ok is True
+
+    from pykeepass import PyKeePass
+
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    entry = next(e for e in kp.entries if e.title == "Grouped Secret")
+    assert [g.name for g in kp.root_group.subgroups if g.name == "skworld"], (
+        "the group should have been created"
+    )
+    assert entry.group.name == "windmill"
+    assert entry.group.parentgroup.name == "skworld"
+
+
+def test_add_reuses_an_existing_group_instead_of_duplicating_it(vc, test_kdbx):
+    vc.add("First In Group", "a", "p1", group="skworld")
+    vc.add("Second In Group", "b", "p2", group="skworld")
+
+    from pykeepass import PyKeePass
+
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    named = [g for g in kp.root_group.subgroups if g.name == "skworld"]
+    assert len(named) == 1, "a second add must not create a parallel group"
+    titles = {e.title for e in named[0].entries}
+    assert {"First In Group", "Second In Group"} <= titles
+
+
+def test_add_backs_up_the_kdbx_before_writing(vc, test_kdbx):
+    """A credential DB write has no undo, so keep the previous bytes."""
+    before = test_kdbx.read_bytes()
+    ok, err = vc.add("Backed Up", "svc", "value")
+    assert err is None and ok is True
+
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
+    assert baks, "add() must write a backup before saving"
+    assert baks[-1].read_bytes() == before, "the backup must be the PRE-write bytes"
+    assert baks[-1].stat().st_mode & 0o777 == 0o600
+
+
+def test_add_prunes_old_backups(vc, test_kdbx):
+    for i in range(8):
+        _ok, err = vc.add(f"Entry {i}", "svc", f"v{i}")
+        assert err is None, err
+    baks = sorted(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
+    assert len(baks) <= vc.BACKUP_KEEP, (
+        f"backups of a 1.8 MB credential DB must not grow without bound, got {len(baks)}"
+    )
+
+
+def test_add_never_prunes_a_hand_made_backup(vc, test_kdbx):
+    """The live DB sits beside human backups (bak-rot-*, bak-pre-*).
+
+    Pruning by name across two naming schemes is how an automated writer
+    deletes somebody's only snapshot, so our prune must not even see them.
+    """
+    human = test_kdbx.with_name(test_kdbx.name + ".bak-rot-20261018")
+    human.write_bytes(b"irreplaceable")
+    for i in range(vc.BACKUP_KEEP + 4):
+        _ok, err = vc.add(f"Churn {i}", "svc", f"v{i}")
+        assert err is None, err
+    assert human.exists(), "a hand-made backup must survive our pruning"
+    assert human.read_bytes() == b"irreplaceable"
+
+
+# ---------------------------------------------------------------------------
+# creds-add hardening: file modes, writer exclusion, history, --length.
+# ---------------------------------------------------------------------------
+
+
+def _mode(p: Path) -> int:
+    return p.stat().st_mode & 0o777
+
+
+def test_add_and_overwrite_keep_db_and_backups_0600_under_umask_022(
+    vc, test_kdbx, monkeypatch
+):
+    import os
+
+    test_kdbx.chmod(0o600)
+    old = os.umask(0o022)
+    try:
+        ok, err = vc.add("Perm One", "svc", "v1")
+        assert err is None and ok
+        assert _mode(test_kdbx) == 0o600, "add() must not widen the live db"
+        ok, err = vc.add("Perm One", "svc", "v2", overwrite=True)
+        assert err is None and ok
+        assert _mode(test_kdbx) == 0o600, "--overwrite must not widen the live db"
+        baks = list(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
+        assert baks and all(_mode(b) == 0o600 for b in baks)
+        assert not list(test_kdbx.parent.glob("*.tmp")), "no stray temp file left"
+    finally:
+        os.umask(old)
+
+
+def test_add_refuses_while_keepassxc_has_the_db_open(vc, test_kdbx):
+    lock = test_kdbx.with_name("." + test_kdbx.name + ".lock")
+    lock.write_text("pid")
+    before = test_kdbx.read_bytes()
+    ok, err = vc.add("Blocked", "svc", "v")
+    assert ok is False and "KeePassXC" in err
+    assert test_kdbx.read_bytes() == before
+
+
+def test_add_serializes_concurrent_writers(vc, test_kdbx):
+    """Two writers must both land; the second must not drop the first."""
+    import threading
+
+    results = []
+
+    def worker(i):
+        results.append(vc.add(f"Concurrent {i}", "svc", f"v{i}"))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(ok and err is None for ok, err in results), results
+    titles, err = vc.list_titles()
+    assert err is None
+    assert {f"Concurrent {i}" for i in range(4)} <= set(titles)
+
+
+def test_add_fails_cleanly_when_the_write_lock_is_held(vc, test_kdbx, monkeypatch):
+    import fcntl
+    import os
+
+    monkeypatch.setattr(vc, "LOCK_WAIT_S", 0.2)
+    fd = os.open(str(test_kdbx) + ".skvault-lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        ok, err = vc.add("Held", "svc", "v")
+    finally:
+        os.close(fd)
+    assert ok is False and "lock" in err
+
+
+def test_overwrite_saves_entry_history(vc, test_kdbx):
+    from pykeepass import PyKeePass
+
+    ok, err = vc.add("Hist", "svc", "old-secret")
+    assert err is None and ok
+    ok, err = vc.add("Hist", "svc", "new-secret", overwrite=True)
+    assert err is None and ok
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    entry = next(e for e in kp.entries if e.title == "Hist")
+    assert entry.password == "new-secret"
+    assert [h.password for h in entry.history] == ["old-secret"]
+
+
+@pytest.mark.parametrize("length", ["0", "-5", "5", "100000"])
+def test_cli_generate_rejects_bad_length(vc, length):
+    from click.testing import CliRunner
+
+    from skvault.cli import build_cli
+
+    result = CliRunner().invoke(
+        build_cli(), ["creds-add", "Bad Len", "--generate", "--length", length]
+    )
+    assert result.exit_code == 1
+    assert "--length must be between" in result.output
+    titles, _ = vc.list_titles()
+    assert "Bad Len" not in titles

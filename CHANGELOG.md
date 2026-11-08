@@ -28,6 +28,14 @@ All notable changes to `skvault` are documented here. The format is based on
 
 ### Added
 
+- **`skvault creds-add`.** Files a new credential into the KeePass vault, optionally
+  into an `a/b` group path (missing levels are created, existing ones reused),
+  with `--generate`, and refuses to replace an existing entry without `--overwrite`.
+  Every write first keeps a copy of the bytes it overwrites as `<db>.bak-autowrite-*`;
+  pruning only ever touches those, never a hand-made `.bak-*` backup.
+  The db and backups stay mode 0600, writers are serialized by a lock file and refused
+  while KeePassXC has the db open, `--overwrite` keeps the old values in entry history,
+  and `--length` is bounded to 16-1024.
 - **`docs-evidence` block + `docs-check` CI gate.** `SOP.md` now ends with an executable
   evidence block of 9 hermetic, repo-local, offline checks: the `skvault-backend` entry
   point (and the *absence* of a bare `skvault` script that would clobber the shim), the
