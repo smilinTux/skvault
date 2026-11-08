@@ -211,9 +211,9 @@ def test_add_refuses_to_clobber_an_existing_entry(vc):
     assert ok is False
     assert "already exists" in (err or "")
     matches, _ = vc.get("GitHub")
-    assert (
-        matches[0]["password"] == "ghsecret"
-    ), "the original must survive a refused add"
+    assert matches[0]["password"] == "ghsecret", (
+        "the original must survive a refused add"
+    )
 
 
 def test_add_overwrite_updates_in_place(vc):
@@ -237,9 +237,9 @@ def test_add_persists_across_a_reopen(vc):
     vc.add("Durable Entry", "svc", "written-once")
     titles, err = vc.list_titles()
     assert err is None
-    assert (
-        "Durable Entry" in titles
-    ), "add() must save the kdbx, not just mutate in memory"
+    assert "Durable Entry" in titles, (
+        "add() must save the kdbx, not just mutate in memory"
+    )
 
 
 def test_add_requires_a_title_and_a_password(vc):
@@ -255,9 +255,7 @@ def test_add_places_the_entry_in_a_named_group(vc, test_kdbx):
     Without this, every automated write lands in the root group, away from the
     entries a human filed by hand, and the vault slowly splits into two layouts.
     """
-    ok, err = vc.add(
-        "Grouped Secret", "svc", "in-a-group", group="skworld/windmill"
-    )
+    ok, err = vc.add("Grouped Secret", "svc", "in-a-group", group="skworld/windmill")
     assert err is None and ok is True
 
     from pykeepass import PyKeePass
@@ -315,7 +313,7 @@ def test_add_never_prunes_a_hand_made_backup(vc, test_kdbx):
     """
     human = test_kdbx.with_name(test_kdbx.name + ".bak-rot-20261018")
     human.write_bytes(b"irreplaceable")
-    for i in range(BACKUP_KEEP_OVERSHOOT := vc.BACKUP_KEEP + 4):
+    for i in range(vc.BACKUP_KEEP + 4):
         ok, err = vc.add("Churn %d" % i, "svc", "v%d" % i)
         assert err is None, err
     assert human.exists(), "a hand-made backup must survive our pruning"
