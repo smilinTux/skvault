@@ -296,12 +296,11 @@ def test_add_backs_up_the_kdbx_before_writing(vc, test_kdbx):
 
 def test_add_prunes_old_backups(vc, test_kdbx):
     for i in range(8):
-        ok, err = vc.add("Entry %d" % i, "svc", "v%d" % i)
+        _ok, err = vc.add(f"Entry {i}", "svc", f"v{i}")
         assert err is None, err
     baks = sorted(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
     assert len(baks) <= vc.BACKUP_KEEP, (
-        "backups of a 1.8 MB credential DB must not grow without bound, got %d"
-        % len(baks)
+        f"backups of a 1.8 MB credential DB must not grow without bound, got {len(baks)}"
     )
 
 
@@ -314,7 +313,7 @@ def test_add_never_prunes_a_hand_made_backup(vc, test_kdbx):
     human = test_kdbx.with_name(test_kdbx.name + ".bak-rot-20261018")
     human.write_bytes(b"irreplaceable")
     for i in range(vc.BACKUP_KEEP + 4):
-        ok, err = vc.add("Churn %d" % i, "svc", "v%d" % i)
+        _ok, err = vc.add(f"Churn {i}", "svc", f"v{i}")
         assert err is None, err
     assert human.exists(), "a hand-made backup must survive our pruning"
     assert human.read_bytes() == b"irreplaceable"

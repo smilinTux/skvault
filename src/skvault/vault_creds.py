@@ -157,8 +157,8 @@ def _backup_db(db: str) -> str | None:
     copy. The backup is the pre-write bytes, mode 0600 like the DB it mirrors.
     """
     src = Path(db)
-    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + "%06dZ" % (
-        time.time_ns() // 1000 % 1000000
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + (
+        f"{time.time_ns() // 1000 % 1000000:06d}Z"
     )
     bak = src.with_name(src.name + BACKUP_PREFIX + stamp)
     try:

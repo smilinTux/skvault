@@ -282,7 +282,7 @@ def cmd_creds_add(
             click.echo("  ✗ secrets do not match, nothing written")
             raise SystemExit(1)
 
-    ok, err = vc.add(
+    _ok, err = vc.add(
         title,
         username,
         password,
