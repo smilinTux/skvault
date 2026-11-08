@@ -19,6 +19,7 @@ Audit: ~/clawd/logs/keepass-access.log
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -110,14 +111,30 @@ def _open():
         master = None  # forget
 
 
-def get(query: str) -> tuple[list[dict], str | None]:
+def _custom_fields(e) -> dict:
+    try:
+        return {k: v for k, v in (e.custom_properties or {}).items() if v is not None}
+    except Exception:  # noqa: BLE001 - older pykeepass / odd entries
+        return {}
+
+
+def get(query: str, deep: bool = False) -> tuple[list[dict], str | None]:
+    """Match entries on title/user/url; with deep=True also on notes and custom fields.
+
+    Every match carries its notes and custom fields: tokens and recovery codes
+    often live there, not in the password field.
+    """
     kp, err = _open()
     if err:
         return [], err
     q = query.lower()
     matches = []
     for e in kp.entries:
-        hay = " ".join(filter(None, [e.title, e.username, e.url])).lower()
+        fields = _custom_fields(e)
+        parts = [e.title, e.username, e.url]
+        if deep:
+            parts += [e.notes, *fields.keys(), *fields.values()]
+        hay = " ".join(str(x) for x in parts if x).lower()
         if q in hay:
             matches.append(
                 {
@@ -125,10 +142,113 @@ def get(query: str) -> tuple[list[dict], str | None]:
                     "username": e.username,
                     "password": e.password,
                     "url": e.url,
+                    "notes": e.notes or "",
+                    "fields": fields,
                 }
             )
-    _audit("get", f"query={query!r} matched={[m['title'] for m in matches]}")
+    _audit("get", f"query={query!r} deep={deep} matched={[m['title'] for m in matches]}")
     return matches, None
+
+
+BACKUP_KEEP = 10
+_BUILTIN = ("title", "username", "password", "url", "notes", "tags", "otp")
+
+
+def _backup_db(db: str) -> Path:
+    """Copy the .kdbx aside (0600) before a write; keep the newest BACKUP_KEEP."""
+    d = config.STATE_DIR / "kdbx-backups"
+    d.mkdir(parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
+    dst = d / f"{Path(db).name}.{time.strftime('%Y%m%dT%H%M%S')}.{os.getpid()}"
+    shutil.copy2(db, dst)
+    os.chmod(dst, 0o600)
+    olds = sorted(d.glob(f"{Path(db).name}.*"))
+    for old in olds[:-BACKUP_KEEP]:
+        old.unlink(missing_ok=True)
+    return dst
+
+
+def put(
+    title: str,
+    *,
+    username: str | None = None,
+    url: str | None = None,
+    password: str | None = None,
+    notes: str | None = None,
+    append_notes: str | None = None,
+    fields: dict | None = None,
+    remove_fields: list | None = None,
+    protect: set | None = None,
+    group: str | None = None,
+    mode: str = "upsert",
+) -> tuple[str | None, str | None]:
+    """Create or update ONE entry, matched by exact title (case-insensitive).
+
+    mode: "upsert" (default), "create" (fail if it exists), "update" (fail if missing).
+    Only the arguments given are changed; everything else on the entry is kept.
+    Returns (action, error) where action is "created", "updated" or "unchanged".
+    """
+    if not title or not title.strip():
+        return None, "title is required"
+    fields = dict(fields or {})
+    for name in list(fields) + list(remove_fields or []):
+        if name.lower() in _BUILTIN:
+            return None, f"{name!r} is a built-in field, use its own option"
+    kp, err = _open()
+    if err:
+        return None, err
+    same = [e for e in kp.entries if (e.title or "").lower() == title.lower()]
+    if len(same) > 1:
+        return None, f"{len(same)} entries are titled {title!r}; rename one first"
+    entry = same[0] if same else None
+    if entry is not None and mode == "create":
+        return None, f"entry {title!r} already exists (drop --create-only to update it)"
+    if entry is None and mode == "update":
+        return None, f"no entry titled {title!r} (drop --update-only to create it)"
+
+    changed: list[str] = []
+    if entry is None:
+        dest = kp.root_group
+        if group:
+            dest = kp.find_groups(path=group.split("/"), first=True) or kp.add_group(
+                kp.root_group, group
+            )
+        entry = kp.add_entry(
+            dest, title, username or "", password or "", url=url or None, notes=notes
+        )
+        action = "created"
+        changed.append("entry")
+    else:
+        action = "updated"
+        for attr, val in (("username", username), ("url", url), ("password", password)):
+            if val is not None and getattr(entry, attr) != val:
+                setattr(entry, attr, val)
+                changed.append(attr)
+        if notes is not None and (entry.notes or "") != notes:
+            entry.notes = notes
+            changed.append("notes")
+    if append_notes:
+        cur = entry.notes or ""
+        entry.notes = (cur.rstrip("\n") + "\n" if cur else "") + append_notes
+        changed.append("notes+")
+    for name, val in fields.items():
+        if _custom_fields(entry).get(name) != val:
+            entry.set_custom_property(name, val, protect=name in (protect or set()))
+            changed.append(f"field:{name}")
+    for name in remove_fields or []:
+        if name in _custom_fields(entry):
+            entry.delete_custom_property(name)
+            changed.append(f"-field:{name}")
+
+    if not changed:
+        _audit("put", f"title={title!r} unchanged")
+        return "unchanged", None
+    _backup_db(kp.filename)
+    entry.touch(modify=True)
+    kp.save()
+    # names only, never values
+    _audit("put", f"title={title!r} {action} changed={changed}")
+    return action, None
 
 
 def list_titles() -> tuple[list[str], str | None]:

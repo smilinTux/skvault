@@ -78,6 +78,34 @@ skvault vault-totp-init                                                # Authy/G
 skvault seal-word                                                      # memorable chat unlock-word (Hermes path)
 ```
 
+### Notes, custom fields, and writing entries
+
+Tokens, PATs and recovery codes often live in an entry's **notes** or **custom fields**,
+not its password. `creds-get` lists both (hidden unless `--show`):
+
+```bash
+skvault creds-get github                      # title/user/url match, notes + fields hidden
+skvault creds-get ghp_ --deep                 # also match inside notes and custom fields
+skvault creds-get "Forge API" --field notes   # one raw value for scripts (exactly one match)
+skvault creds-get "Forge API" --field token   # a custom field by name
+```
+
+`creds-put` creates or updates ONE entry by exact title and changes only what you pass.
+Secret values come from **stdin only**, never argv (shell history, `ps`):
+
+```bash
+skvault creds-put "Forge API" --user bot --url https://forge.example --set region=nor
+printf '%s' "$TOKEN" | skvault creds-put "Forge API" --stdin field:token   # protected field
+printf '%s' "$PW"    | skvault creds-put "Forge API" --stdin password
+echo "rotated 2026-11-08" | skvault creds-put "Forge API" --stdin append-notes
+skvault creds-put "New Svc" --generate 32 --create-only --show             # new random password
+skvault creds-put "Forge API" --unset region
+```
+
+Every write first copies the `.kdbx` to `state/kdbx-backups/` (0600, newest 10 kept) and
+logs the changed field NAMES (never values) to the audit log. `--create-only` /
+`--update-only` refuse the other case; two entries with the same title are refused.
+
 ### ⚠️ `skvault` is not in this repository
 
 Every command above says `skvault`, but **`pip install` gives you `skvault-backend`.**

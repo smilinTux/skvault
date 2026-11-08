@@ -5,7 +5,8 @@ The stable `skvault` shim delegates here. Command names match what the shim and
 hooks expect:
 
   skvault unlock [--word W]    skvault lock              skvault vault-status [--notify]
-  skvault seal-word           skvault creds-init ...    skvault creds-get <q> [--show]
+  skvault seal-word           skvault creds-init ...    skvault creds-get <q> [--show] [--deep] [--field F]
+  skvault creds-put <title> [--user U] [--url U] [--set K=V] [--stdin password|notes|append-notes|field:K]
   skvault creds-list [filter] skvault creds-status
   skvault vault-share-init --holders a,b,c [--threshold k]
   skvault vault-recover --providers a,b [--totp CODE]   skvault vault-recovery-status
@@ -173,17 +174,45 @@ def cmd_creds_init(db: str, keyfile: str | None) -> None:
 
 
 @click.command(
-    "creds-get", help="Look up a credential by site/title/user (needs vault unlocked)"
+    "creds-get",
+    help="Look up a credential by site/title/user (needs vault unlocked). "
+    "Notes and custom fields are listed too, hidden unless --show.",
 )
 @click.argument("query")
-@click.option("--show", is_flag=True, help="Reveal the password (otherwise hidden)")
-def cmd_creds_get(query: str, show: bool) -> None:
+@click.option("--show", is_flag=True, help="Reveal the password, notes and custom fields")
+@click.option(
+    "--deep", is_flag=True, help="Also match the query inside notes and custom fields"
+)
+@click.option(
+    "--field",
+    "field",
+    default=None,
+    help="Print ONLY this value, raw, for scripts: password, username, url, notes, "
+    "or a custom field name. Needs exactly one match.",
+)
+def cmd_creds_get(query: str, show: bool, deep: bool, field: str | None) -> None:
     from skvault import vault_creds as vc
 
-    matches, err = vc.get(query)
+    matches, err = vc.get(query, deep=deep)
     if err:
-        click.echo(f"  ✗ {err}")
+        click.echo(f"  ✗ {err}", err=bool(field))
         raise SystemExit(1)
+    if field:
+        if len(matches) != 1:
+            titles = ", ".join(repr(m["title"]) for m in matches) or "none"
+            click.echo(f"  ✗ --field needs exactly one match, got {len(matches)}: {titles}", err=True)
+            raise SystemExit(2)
+        m = matches[0]
+        if field in ("password", "username", "url", "notes", "title"):
+            value = m.get(field) or ""
+        elif field in m["fields"]:
+            value = m["fields"][field]
+        else:
+            names = ", ".join(sorted(m["fields"])) or "none"
+            click.echo(f"  ✗ no field {field!r} (custom fields: {names})", err=True)
+            raise SystemExit(2)
+        click.echo(value)
+        raise SystemExit(0)
     if not matches:
         click.echo(f"  (no entry matching {query!r})")
         raise SystemExit(0)
@@ -194,6 +223,126 @@ def cmd_creds_get(query: str, show: bool) -> None:
             click.echo(f"      pass: {m['password']}")
         else:
             click.echo("      pass: (hidden — add --show to reveal)")
+        notes = m.get("notes") or ""
+        if notes:
+            if show:
+                click.echo("      notes:")
+                for line in notes.splitlines():
+                    click.echo(f"        {line}")
+            else:
+                n = len(notes.splitlines())
+                click.echo(f"      notes: {n} line(s) (hidden — --show, or --field notes)")
+        for name, value in sorted(m.get("fields", {}).items()):
+            shown = value if show else "(hidden)"
+            click.echo(f"      field {name}: {shown}")
+    raise SystemExit(0)
+
+
+@click.command(
+    "creds-put",
+    help="Create or update ONE entry by exact title (needs vault unlocked). "
+    "Only what you pass changes. Secrets come from stdin, never argv.",
+)
+@click.argument("title")
+@click.option("--user", "username", default=None, help="Username / login")
+@click.option("--url", default=None, help="URL")
+@click.option("--group", default=None, help="Group path for a NEW entry, e.g. 'SK Agents/GitHub'")
+@click.option(
+    "--set",
+    "sets",
+    multiple=True,
+    metavar="NAME=VALUE",
+    help="Plain (non-secret) custom field; repeatable",
+)
+@click.option(
+    "--unset", "unsets", multiple=True, metavar="NAME", help="Remove a custom field; repeatable"
+)
+@click.option(
+    "--stdin",
+    "stdin_target",
+    default=None,
+    metavar="TARGET",
+    help="Read ONE value from stdin into TARGET: password, notes, append-notes, "
+    "or field:NAME (stored protected). Notes keep every line.",
+)
+@click.option(
+    "--generate",
+    type=click.IntRange(12, 128),
+    default=None,
+    metavar="N",
+    help="Set a new random password of N chars (printed only with --show)",
+)
+@click.option("--show", is_flag=True, help="With --generate, print the new password")
+@click.option("--create-only", is_flag=True, help="Fail if the entry already exists")
+@click.option("--update-only", is_flag=True, help="Fail if the entry does not exist")
+def cmd_creds_put(
+    title, username, url, group, sets, unsets, stdin_target, generate, show, create_only, update_only
+) -> None:
+    import secrets as _secrets
+    import string
+    import sys
+
+    from skvault import vault_creds as vc
+
+    if create_only and update_only:
+        click.echo("  ✗ --create-only and --update-only are exclusive", err=True)
+        raise SystemExit(2)
+    fields = {}
+    for item in sets:
+        if "=" not in item:
+            click.echo(f"  ✗ --set needs NAME=VALUE, got {item!r}", err=True)
+            raise SystemExit(2)
+        k, v = item.split("=", 1)
+        fields[k.strip()] = v
+    password = notes = append = None
+    protect = set()
+    if stdin_target:
+        raw = sys.stdin.read()
+        if stdin_target in ("notes", "append-notes"):
+            value = raw.rstrip("\n")
+        else:
+            value = raw.splitlines()[0] if raw else ""
+        if not value:
+            click.echo("  ✗ nothing on stdin", err=True)
+            raise SystemExit(2)
+        if stdin_target == "password":
+            password = value
+        elif stdin_target == "notes":
+            notes = value
+        elif stdin_target == "append-notes":
+            append = value
+        elif stdin_target.startswith("field:") and len(stdin_target) > 6:
+            fields[stdin_target[6:]] = value
+            protect.add(stdin_target[6:])
+        else:
+            click.echo(f"  ✗ unknown --stdin target {stdin_target!r}", err=True)
+            raise SystemExit(2)
+    if generate:
+        if password is not None:
+            click.echo("  ✗ --generate and --stdin password are exclusive", err=True)
+            raise SystemExit(2)
+        alphabet = string.ascii_letters + string.digits + "-_.,:;!@#%^*+="
+        password = "".join(_secrets.choice(alphabet) for _ in range(generate))
+    mode = "create" if create_only else "update" if update_only else "upsert"
+    action, err = vc.put(
+        title,
+        username=username,
+        url=url,
+        password=password,
+        notes=notes,
+        append_notes=append,
+        fields=fields,
+        remove_fields=list(unsets),
+        protect=protect,
+        group=group,
+        mode=mode,
+    )
+    if err:
+        click.echo(f"  ✗ {err}", err=True)
+        raise SystemExit(1)
+    click.echo(f"  ✓ {title}: {action}")
+    if generate and show:
+        click.echo(f"      pass: {password}")
     raise SystemExit(0)
 
 
@@ -399,6 +548,7 @@ _COMMANDS = [
     cmd_seal_word,
     cmd_creds_init,
     cmd_creds_get,
+    cmd_creds_put,
     cmd_creds_list,
     cmd_creds_status,
     cmd_vault_share_init,

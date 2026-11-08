@@ -188,3 +188,110 @@ def test_cli_creds_list_runs(vc, monkeypatch, test_kdbx, tmp_path):
     result = runner.invoke(build_cli(), ["creds-list"])
     assert result.exit_code == 0, result.output
     assert "GitHub" in result.output
+
+
+# ---- notes, custom fields, creds-put ---------------------------------------
+
+def _cli(vc, monkeypatch, tmp_path, args, stdin=None):
+    from click.testing import CliRunner
+
+    from skvault import config
+    from skvault.cli import build_cli
+
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    return CliRunner().invoke(build_cli(), args, input=stdin)
+
+
+def test_put_creates_then_get_returns_notes_and_fields(vc, monkeypatch, tmp_path):
+    from skvault import config
+
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    action, err = vc.put(
+        "Forge API",
+        username="bot",
+        url="https://forge.example",
+        password="pw1",
+        notes="line one\nPAT: tok_abc123",
+        fields={"region": "nor"},
+    )
+    assert (action, err) == ("created", None)
+    m, err = vc.get("forge api")
+    assert err is None and len(m) == 1
+    assert m[0]["notes"] == "line one\nPAT: tok_abc123"
+    assert m[0]["fields"] == {"region": "nor"}
+    assert m[0]["password"] == "pw1"
+    # backup written before the save, 0600
+    backups = list((tmp_path / "state" / "kdbx-backups").iterdir())
+    assert len(backups) == 1 and (backups[0].stat().st_mode & 0o777) == 0o600
+
+
+def test_get_deep_matches_notes_only_when_asked(vc, monkeypatch, tmp_path):
+    from skvault import config
+
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    vc.put("Plain Site", notes="the token is hidden-needle-42")
+    assert vc.get("hidden-needle-42")[0] == []
+    hits, _ = vc.get("hidden-needle-42", deep=True)
+    assert [h["title"] for h in hits] == ["Plain Site"]
+
+
+def test_put_updates_only_given_fields_and_reports_unchanged(vc, monkeypatch, tmp_path):
+    from skvault import config
+
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    assert vc.put("GitHub", append_notes="PAT: ghp_x") == ("updated", None)
+    m = vc.get("github")[0][0]
+    assert m["password"] == "ghsecret" and m["username"] == "octocat"
+    assert m["notes"] == "PAT: ghp_x"
+    assert vc.put("GitHub", username="octocat") == ("unchanged", None)
+    assert vc.put("GitHub", fields={"scope": "repo"}, remove_fields=[]) == ("updated", None)
+    assert vc.put("GitHub", remove_fields=["scope"]) == ("updated", None)
+    assert vc.get("github")[0][0]["fields"] == {}
+
+
+def test_put_modes_and_guards(vc, monkeypatch, tmp_path):
+    from skvault import config
+
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "state")
+    assert vc.put("GitHub", mode="create")[1].startswith("entry 'GitHub' already exists")
+    assert vc.put("Nope", mode="update")[1].startswith("no entry titled")
+    assert "built-in" in vc.put("GitHub", fields={"Password": "x"})[1]
+    assert vc.put("  ")[1] == "title is required"
+
+
+def test_cli_get_hides_notes_and_fields_unless_show(vc, monkeypatch, tmp_path):
+    vc.put("Notes Site", notes="secret-note-value", fields={"apikey": "k-123"})
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "notes site"])
+    assert r.exit_code == 0, r.output
+    assert "secret-note-value" not in r.output and "k-123" not in r.output
+    assert "notes: 1 line(s) (hidden" in r.output and "field apikey: (hidden)" in r.output
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "notes site", "--show"])
+    assert "secret-note-value" in r.output and "k-123" in r.output
+
+
+def test_cli_get_field_prints_one_raw_value(vc, monkeypatch, tmp_path):
+    vc.put("Notes Site", notes="a\nb", fields={"apikey": "k-123"})
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "notes site", "--field", "notes"])
+    assert r.exit_code == 0 and r.output == "a\nb\n"
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "notes site", "--field", "apikey"])
+    assert r.output == "k-123\n"
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "notes site", "--field", "missing"])
+    assert r.exit_code == 2
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-get", "e", "--field", "password"])
+    assert r.exit_code == 2  # several matches
+
+
+def test_cli_put_reads_secrets_from_stdin_only(vc, monkeypatch, tmp_path):
+    r = _cli(vc, monkeypatch, tmp_path,
+             ["creds-put", "New Svc", "--user", "svc", "--stdin", "field:token"], stdin="tok-999\n")
+    assert r.exit_code == 0, r.output
+    assert "tok-999" not in r.output
+    assert vc.get("new svc")[0][0]["fields"]["token"] == "tok-999"
+    r = _cli(vc, monkeypatch, tmp_path,
+             ["creds-put", "New Svc", "--stdin", "append-notes"], stdin="first\nsecond\n")
+    assert vc.get("new svc")[0][0]["notes"] == "first\nsecond"
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-put", "New Svc", "--generate", "24"])
+    assert r.exit_code == 0 and "pass:" not in r.output
+    assert len(vc.get("new svc")[0][0]["password"]) == 24
+    r = _cli(vc, monkeypatch, tmp_path, ["creds-put", "New Svc", "--set", "noequals"])
+    assert r.exit_code == 2
