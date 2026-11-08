@@ -317,3 +317,104 @@ def test_add_never_prunes_a_hand_made_backup(vc, test_kdbx):
         assert err is None, err
     assert human.exists(), "a hand-made backup must survive our pruning"
     assert human.read_bytes() == b"irreplaceable"
+
+
+# ---------------------------------------------------------------------------
+# creds-add hardening: file modes, writer exclusion, history, --length.
+# ---------------------------------------------------------------------------
+
+
+def _mode(p: Path) -> int:
+    return p.stat().st_mode & 0o777
+
+
+def test_add_and_overwrite_keep_db_and_backups_0600_under_umask_022(
+    vc, test_kdbx, monkeypatch
+):
+    import os
+
+    test_kdbx.chmod(0o600)
+    old = os.umask(0o022)
+    try:
+        ok, err = vc.add("Perm One", "svc", "v1")
+        assert err is None and ok
+        assert _mode(test_kdbx) == 0o600, "add() must not widen the live db"
+        ok, err = vc.add("Perm One", "svc", "v2", overwrite=True)
+        assert err is None and ok
+        assert _mode(test_kdbx) == 0o600, "--overwrite must not widen the live db"
+        baks = list(test_kdbx.parent.glob(test_kdbx.name + vc.BACKUP_PREFIX + "*"))
+        assert baks and all(_mode(b) == 0o600 for b in baks)
+        assert not list(test_kdbx.parent.glob("*.tmp")), "no stray temp file left"
+    finally:
+        os.umask(old)
+
+
+def test_add_refuses_while_keepassxc_has_the_db_open(vc, test_kdbx):
+    lock = test_kdbx.with_name("." + test_kdbx.name + ".lock")
+    lock.write_text("pid")
+    before = test_kdbx.read_bytes()
+    ok, err = vc.add("Blocked", "svc", "v")
+    assert ok is False and "KeePassXC" in err
+    assert test_kdbx.read_bytes() == before
+
+
+def test_add_serializes_concurrent_writers(vc, test_kdbx):
+    """Two writers must both land; the second must not drop the first."""
+    import threading
+
+    results = []
+
+    def worker(i):
+        results.append(vc.add(f"Concurrent {i}", "svc", f"v{i}"))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(ok and err is None for ok, err in results), results
+    titles, err = vc.list_titles()
+    assert err is None
+    assert {f"Concurrent {i}" for i in range(4)} <= set(titles)
+
+
+def test_add_fails_cleanly_when_the_write_lock_is_held(vc, test_kdbx, monkeypatch):
+    import fcntl
+    import os
+
+    monkeypatch.setattr(vc, "LOCK_WAIT_S", 0.2)
+    fd = os.open(str(test_kdbx) + ".skvault-lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        ok, err = vc.add("Held", "svc", "v")
+    finally:
+        os.close(fd)
+    assert ok is False and "lock" in err
+
+
+def test_overwrite_saves_entry_history(vc, test_kdbx):
+    from pykeepass import PyKeePass
+
+    ok, err = vc.add("Hist", "svc", "old-secret")
+    assert err is None and ok
+    ok, err = vc.add("Hist", "svc", "new-secret", overwrite=True)
+    assert err is None and ok
+    kp = PyKeePass(str(test_kdbx), password=TEST_MASTER)
+    entry = next(e for e in kp.entries if e.title == "Hist")
+    assert entry.password == "new-secret"
+    assert [h.password for h in entry.history] == ["old-secret"]
+
+
+@pytest.mark.parametrize("length", ["0", "-5", "5", "100000"])
+def test_cli_generate_rejects_bad_length(vc, length):
+    from click.testing import CliRunner
+
+    from skvault.cli import build_cli
+
+    result = CliRunner().invoke(
+        build_cli(), ["creds-add", "Bad Len", "--generate", "--length", length]
+    )
+    assert result.exit_code == 1
+    assert "--length must be between" in result.output
+    titles, _ = vc.list_titles()
+    assert "Bad Len" not in titles

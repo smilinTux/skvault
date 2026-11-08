@@ -18,8 +18,9 @@ Audit: ~/clawd/logs/keepass-access.log
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
-import shutil
 import time
 from pathlib import Path
 
@@ -162,8 +163,12 @@ def _backup_db(db: str) -> str | None:
     )
     bak = src.with_name(src.name + BACKUP_PREFIX + stamp)
     try:
-        shutil.copy2(src, bak)
-        os.chmod(bak, 0o600)
+        # Created 0600 from the first byte (never copy2 then chmod, which
+        # leaves a window where the secrets-bearing copy follows the umask).
+        fd = os.open(bak, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
+            while chunk := inp.read(1 << 20):
+                out.write(chunk)
     except OSError as e:
         return f"backup failed: {str(e)[:80]}"
     # Prune ONLY our own copies. The live DB sits beside hand-made backups with
@@ -177,6 +182,61 @@ def _backup_db(db: str) -> str | None:
         except OSError:
             pass  # a backup we cannot prune is not a reason to block the write
     return None
+
+
+LOCK_WAIT_S = 10.0
+MAX_GENERATE_LENGTH = 1024
+
+
+def _keepassxc_lock(db: str) -> Path:
+    """KeePassXC drops `.<name>.lock` beside a database it has open."""
+    p = Path(db)
+    return p.with_name("." + p.name + ".lock")
+
+
+@contextlib.contextmanager
+def _write_lock(db: str):
+    """Exclusive writer lock on a lock file next to the db (0600).
+
+    Held across open -> modify -> backup -> save so two writers cannot each
+    read the same state and have the second save drop the first one's entry.
+    Refuses outright if KeePassXC's own lock file says the db is open in the
+    GUI: a save from here would be overwritten (or overwrite its unsaved work).
+    """
+    if _keepassxc_lock(db).exists():
+        raise RuntimeError(
+            "database appears to be open in KeePassXC (lock file present); "
+            "close it first"
+        )
+    lock_path = str(db) + ".skvault-lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        deadline = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("another skvault write holds the lock") from None
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)  # closing the fd releases the flock
+
+
+def _save_private(kp, db: str) -> None:
+    """kp.save() under umask 077, then pin the live file to 0600.
+
+    pykeepass writes <db>.tmp with the process umask and renames it over the
+    live file, which silently turned a 0600 vault into 0644.
+    """
+    old = os.umask(0o077)
+    try:
+        kp.save()
+    finally:
+        os.umask(old)
+    os.chmod(db, 0o600)
 
 
 def add(
@@ -208,6 +268,21 @@ def add(
     """
     if not title or not password:
         return False, "title and password are both required"
+    db = _db_path()
+    if not db or not Path(db).exists():
+        return False, "no KeePass DB configured (run `skvault creds-init`)"
+    try:
+        with _write_lock(db):
+            return _add_locked(
+                title, username, password, url, notes, group, overwrite, db
+            )
+    except RuntimeError as e:
+        return False, str(e)
+    except OSError as e:
+        return False, f"lock failed: {str(e)[:80]}"
+
+
+def _add_locked(title, username, password, url, notes, group, overwrite, db):
     kp, err = _open()
     if err:
         return False, err
@@ -216,6 +291,7 @@ def add(
         return False, f"entry {title!r} already exists (pass overwrite to replace it)"
     if existing:
         entry = existing[0]
+        entry.save_history()  # keep the prior values in KeePass entry history
         entry.password = password
         if username:
             entry.username = username
@@ -234,11 +310,11 @@ def add(
             notes=notes or "",
         )
         action = "added"
-    bak_err = _backup_db(_db_path())
+    bak_err = _backup_db(db)
     if bak_err:
         return False, bak_err + " (refusing to write without a backup)"
     try:
-        kp.save()
+        _save_private(kp, db)
     except Exception as e:  # noqa: BLE001 - KeePass exposes backend-specific failures
         return False, f"save failed: {str(e)[:80]}"
     # The value never reaches the audit log; only that a write happened.

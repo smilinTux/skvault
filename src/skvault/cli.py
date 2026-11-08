@@ -271,6 +271,12 @@ def cmd_creds_add(
     from skvault import vault_creds as vc
 
     if generate:
+        if not 16 <= length <= vc.MAX_GENERATE_LENGTH:
+            click.echo(
+                f"  ✗ --length must be between 16 and {vc.MAX_GENERATE_LENGTH} "
+                "bytes, nothing written"
+            )
+            raise SystemExit(1)
         password = secrets.token_urlsafe(length)
     else:
         password = getpass.getpass("  secret (hidden): ")
